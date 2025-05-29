@@ -1,10 +1,10 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { useRecoilValue } from "recoil";
-import io from "socket.io-client";
+import { io } from "socket.io-client";
 import userAtom from "../atoms/userAtom";
 import { motion } from "framer-motion";
 
-const SocketContext = createContext();
+export const SocketContext = createContext();
 
 export const useSocket = () => {
   return useContext(SocketContext);
@@ -25,14 +25,18 @@ export const SocketContextProvider = ({ children }) => {
 
     const socketInstance = io(serverUrl, {
       query: { userId: user._id },
-      transports: ["websocket"],
+      transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: 10,
-      reconnectionDelay: 500,
+      reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
+      randomizationFactor: 0.5,
       withCredentials: true,
-      forceNew: false,
-      timeout: 10000,
+      forceNew: true,
+      timeout: 20000,
+      autoConnect: true,
+      upgrade: true,
+      rememberUpgrade: true,
     });
 
     setSocket(socketInstance);
@@ -50,10 +54,13 @@ export const SocketContextProvider = ({ children }) => {
     socketInstance.on("connect_error", (error) => {
       console.error("Socket connection error:", error.message);
       setConnectionStatus("error");
+      setTimeout(() => {
+        socketInstance.connect();
+      }, 1000);
     });
 
     socketInstance.on("reconnect", (attempt) => {
-      console.log(`Reconnected to server after ${attempt} attempts`);
+      console.log(`Reconnected after ${attempt} attempts`);
       setConnectionStatus("connected");
     });
 
@@ -63,38 +70,36 @@ export const SocketContextProvider = ({ children }) => {
     });
 
     socketInstance.on("reconnect_failed", () => {
-      console.error("Failed to reconnect to socket server");
+      console.error("Failed to reconnect");
       setConnectionStatus("failed");
     });
 
     socketInstance.on("disconnect", (reason) => {
-      console.warn("Socket disconnected:", reason);
+      console.warn("Disconnected:", reason);
       setConnectionStatus("disconnected");
+      if (reason === "io server disconnect") {
+        socketInstance.connect();
+      }
     });
 
     const pingInterval = setInterval(() => {
       if (socketInstance.connected) {
         socketInstance.emit("ping");
       }
-    }, 30000);
-
-    socketInstance.on("pong", () => {
-      console.log("Received pong from server");
-    });
+    }, 25000);
 
     return () => {
       clearInterval(pingInterval);
-      socketInstance.off("connect");
-      socketInstance.off("getOnlineUsers");
-      socketInstance.off("connect_error");
-      socketInstance.off("reconnect");
-      socketInstance.off("reconnect_attempt");
-      socketInstance.off("reconnect_failed");
-      socketInstance.off("disconnect");
-      socketInstance.off("pong");
-      socketInstance.disconnect();
-      setSocket(null);
-      setConnectionStatus("disconnected");
+      if (socketInstance) {
+        socketInstance.off("connect");
+        socketInstance.off("getOnlineUsers");
+        socketInstance.off("connect_error");
+        socketInstance.off("reconnect");
+        socketInstance.off("reconnect_attempt");
+        socketInstance.off("reconnect_failed");
+        socketInstance.off("disconnect");
+        socketInstance.disconnect();
+      }
     };
   }, [user?._id, serverUrl]);
 

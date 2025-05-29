@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useRecoilValue } from "recoil";
 import userAtom from "../atoms/userAtom";
@@ -13,11 +13,11 @@ import {
   Avatar,
 } from "@mui/material";
 import {
-  Home as HomeIcon,
-  Search as SearchIcon,
-  PersonOutline as PersonIcon,
-  Chat as ChatIcon,
-  AddBox as AddBoxIcon,
+  HomeOutlined as HomeIcon,
+  SearchOutlined as SearchIcon,
+  AccountCircleOutlined as PersonIcon,
+  ForumOutlined as ChatIcon,
+  AddBoxOutlined as AddCircleIcon,
 } from "@mui/icons-material";
 
 // Antd Imports
@@ -35,7 +35,7 @@ const BottomNav = ({ onOpenCreatePost }) => {
 
   // Simulate loading for demo purposes
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 2000); // 2-second loading simulation
+    const timer = setTimeout(() => setLoading(false), 1000);
     return () => clearTimeout(timer);
   }, []);
 
@@ -68,11 +68,13 @@ const BottomNav = ({ onOpenCreatePost }) => {
         bottom: 0,
         left: 0,
         right: 0,
-        bgcolor: "#1A202C", // Mimics gray.800
+        bgcolor: "#080201",
         color: "white",
-        py: 1,
+        py: 1.5,
         zIndex: 10,
-        boxShadow: "0 -2px 10px rgba(0,0,0,0.2)",
+        boxShadow: "0 -2px 15px rgba(0,0,0,0.3)", // Enhanced shadow
+        borderTopLeftRadius: "20px", // Curved borders
+        borderTopRightRadius: "20px", // Curved borders
       }}
     >
       {loading ? (
@@ -81,8 +83,9 @@ const BottomNav = ({ onOpenCreatePost }) => {
             <Skeleton
               key={index}
               variant="circular"
-              width={48}
-              height={48}
+              width={56}
+              height={56}
+              sx={{ bgcolor: "#334155" }} // Updated skeleton color
             />
           ))}
         </AntdFlex>
@@ -91,12 +94,14 @@ const BottomNav = ({ onOpenCreatePost }) => {
           <Tooltip title="Home">
             <IconButton
               component={motion.button}
-              whileHover={{ scale: 1.1 }}
+              whileHover={{ scale: 1.2, rotate: 10 }} // Enhanced hover effect
               whileTap={{ scale: 0.9 }}
               onClick={() => navigate("/")}
               sx={{
-                color: isActive("/") ? "#42A5F5" : "white", // blue.400 equivalent
-                "&:hover": { color: "#42A5F5" },
+                color: isActive("/") ? "#8515fe" : "white", // Updated to a vibrant blue
+                "&:hover": { color: "#8515fe" },
+                borderRadius: "50%", // Curved border
+                backgroundColor: isActive("/") ? "rgba(99, 102, 241, 0.1)" : "transparent", // Background color for active state
               }}
               aria-label="Home"
             >
@@ -107,28 +112,32 @@ const BottomNav = ({ onOpenCreatePost }) => {
           <Tooltip title="Create Post">
             <IconButton
               component={motion.button}
-              whileHover={{ scale: 1.1 }}
+              whileHover={{ scale: 1.2, rotate: -10 }} // Enhanced hover effect
               whileTap={{ scale: 0.9 }}
               onClick={handleCreatePostClick}
               sx={{
-                color: isActive("/create-post") ? "#42A5F5" : "white",
-                "&:hover": { color: "#42A5F5" },
+                color: isActive("/create-post") ? "#8515fe" : "white",
+                "&:hover": { color: "#8515fe" },
+                borderRadius: "50%", // Curved border
+                backgroundColor: isActive("/create-post") ? "rgba(99, 102, 241, 0.1)" : "transparent", // Background color for active state
               }}
               aria-label="Create Post"
             >
-              <AddBoxIcon fontSize="large" />
+              <AddCircleIcon fontSize="large" />
             </IconButton>
           </Tooltip>
 
           <Tooltip title="Search">
             <IconButton
               component={motion.button}
-              whileHover={{ scale: 1.1 }}
+              whileHover={{ scale: 1.2, rotate: 10 }} // Enhanced hover effect
               whileTap={{ scale: 0.9 }}
               onClick={() => navigate("/search")}
               sx={{
-                color: isActive("/search") ? "#42A5F5" : "white",
-                "&:hover": { color: "#42A5F5" },
+                color: isActive("/search") ? "#8515fe" : "white",
+                "&:hover": { color: "#8515fe" },
+                borderRadius: "50%", // Curved border
+                backgroundColor: isActive("/search") ? "rgba(99, 102, 241, 0.1)" : "transparent", // Background color for active state
               }}
               aria-label="Search"
             >
@@ -137,32 +146,33 @@ const BottomNav = ({ onOpenCreatePost }) => {
           </Tooltip>
 
           <Tooltip title="Profile">
-          <IconButton
-  component={motion.button}
-  whileHover={{ scale: 1.1 }}
-  whileTap={{ scale: 0.9 }}
-  onClick={() => navigate(`/${user?.username}`)}
-  sx={{ p: 0, borderRadius: "50%" }}
-  aria-label="Profile"
-  title="Profile"
->
-  <Avatar
-    src={user?.profilePic}
-    alt={user?.username}
-    sx={{ width: 32, height: 32 }}
-  />
-</IconButton>
+            <IconButton
+              component={motion.button}
+              whileHover={{ scale: 1.2 }} // Enhanced hover effect
+              whileTap={{ scale: 0.9 }}
+              onClick={handleProfileClick}
+              sx={{ p: 0, borderRadius: "50%" }}
+              aria-label="Profile"
+            >
+              <Avatar
+                src={user?.profilePic}
+                alt={user?.username}
+                sx={{ width: 40, height: 40, border: "2px solid #8515fe" }} // Updated avatar size and border
+              />
+            </IconButton>
           </Tooltip>
 
           <Tooltip title="Chat">
             <IconButton
               component={motion.button}
-              whileHover={{ scale: 1.1 }}
+              whileHover={{ scale: 1.2, rotate: -10 }} // Enhanced hover effect
               whileTap={{ scale: 0.9 }}
               onClick={() => navigate("/chat")}
               sx={{
-                color: isActive("/chat") ? "#42A5F5" : "white",
-                "&:hover": { color: "#42A5F5" },
+                color: isActive("/chat") ? "#8515fe" : "white",
+                "&:hover": { color: "#8515fe" },
+                borderRadius: "50%", // Curved border
+                backgroundColor: isActive("/chat") ? "rgba(99, 102, 241, 0.1)" : "transparent", // Background color for active state
               }}
               aria-label="Chat"
             >

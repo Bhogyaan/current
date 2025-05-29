@@ -1,61 +1,71 @@
 import express from "express";
 import multer from "multer";
 import {
-  getAllPosts, // Added
+  getAllPosts,
   createPost,
   createStory,
   getPost,
   deletePost,
   likeUnlikePost,
   commentOnPost,
-  replyToComment,
   likeUnlikeComment,
   banPost,
   unbanPost,
   getFeedPosts,
   getUserPosts,
   getStories,
-  likeUnlikeReply,
   editPost,
   editComment,
   deleteComment,
   getBookmarks,
   bookmarkUnbookmarkPost,
   getSuggestedPosts,
+  getPaginatedComments,
+  // sharePost,
+  // getBookmarkedUsersCount,
 } from "../controllers/postController.js";
-
 import protectRoute from "../middlewares/protectRoute.js";
+import rateLimit from "express-rate-limit";
 
 const router = express.Router();
 const upload = multer({ dest: "uploads/" });
 
-// GET Routes
-router.get("/all", protectRoute, getAllPosts); // Added
+router.use((req, res, next) => {
+  res.setHeader("Content-Type", "application/json");
+  next();
+});
+
+const commentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit to 100 comments per IP
+});
+
+router.get("/all", protectRoute, getAllPosts);
 router.get("/feed", protectRoute, getFeedPosts);
 router.get("/stories", protectRoute, getStories);
-router.get("/user/:username", getUserPosts);
+// router.get("/user/:username", getUserPosts);
 router.get("/:id", getPost);
-router.get("/bookmarks/:username", protectRoute, getBookmarks);
+// router.get("/bookmarks/:username", protectRoute, getBookmarks);
 router.get("/suggested", protectRoute, getSuggestedPosts);
-router.get("/all", protectRoute, getAllPosts);
-// POST Routes
+router.get("/:postId/comments", protectRoute, getPaginatedComments);
+router.get("/user/:username", protectRoute, getUserPosts);
+router.get("/bookmarks/:username", protectRoute, getBookmarks);
+// router.get("/bookmarked/:id", protectRoute, getBookmarkedUsersCount);
+
 router.post("/create", protectRoute, upload.single("media"), createPost);
 router.post("/story", protectRoute, upload.single("media"), createStory);
-router.post("/post/:postId/comment", protectRoute, commentOnPost);
-router.post("/post/:postId/comment/:commentId/reply", protectRoute, replyToComment);
+router.post("/:postId/comment", protectRoute, commentLimiter, commentOnPost);
+// router.post("/:id/share", protectRoute, sharePost);
 
-// PUT Routes
 router.put("/like/:id", protectRoute, likeUnlikePost);
 router.put("/bookmark/:id", protectRoute, bookmarkUnbookmarkPost);
 router.put("/:id", protectRoute, editPost);
-router.put("/post/:postId/comment/:commentId/like", protectRoute, likeUnlikeComment);
-router.put("/post/:postId/comment/:commentId/reply/:replyId/like", protectRoute, likeUnlikeReply);
-router.put("/ban/:id", protectRoute, banPost);
-router.put("/unban/:id", protectRoute, unbanPost);
-router.put("/post/:postId/comment/:commentId", protectRoute, editComment);
+router.put("/:postId/comment/:commentId/like", protectRoute, likeUnlikeComment);
+router.put("/:id/ban", protectRoute, banPost);      // Fixed route
+router.put("/:id/unban", protectRoute, unbanPost); 
+router.put("/:postId/comment/:commentId", protectRoute, editComment);
 
-// DELETE Routes
 router.delete("/:id", protectRoute, deletePost);
-router.delete("/post/:postId/comment/:commentId", protectRoute, deleteComment);
+router.delete("/:postId/comment/:commentId", protectRoute, deleteComment);
 
 export default router;

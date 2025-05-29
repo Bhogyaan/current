@@ -1,23 +1,11 @@
 import mongoose from "mongoose";
 
-const replySchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  text: { type: String, required: true },
-  userProfilePic: { type: String, default: "" },
-  username: { type: String, default: "" },
-  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date },
-  isEdited: { type: Boolean, default: false }
-});
-
 const commentSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  text: { type: String, required: true },
+  text: { type: String, required: true, trim: true },
   userProfilePic: { type: String, default: "" },
   username: { type: String, default: "" },
   likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-  replies: [replySchema],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date },
   isEdited: { type: Boolean, default: false }
@@ -29,7 +17,7 @@ const postSchema = new mongoose.Schema({
     ref: "User", 
     required: true 
   },
-  text: { type: String, required: true },
+  text: { type: String, required: true, trim: true },
   media: { type: String },
   mediaType: {
     type: String,
@@ -70,6 +58,11 @@ postSchema.virtual('bannedByUser', {
   justOne: true
 });
 
+postSchema.index({ postedBy: 1 });
+postSchema.index({ createdAt: -1 });
+postSchema.index({ likes: 1 });
+postSchema.index({ 'comments._id': 1 });
+
 const Post = mongoose.model("Post", postSchema);
 
-export default Post;
+export { Post };

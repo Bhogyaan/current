@@ -1,8 +1,9 @@
-import Post from "../models/postModel.js";
+import { Post } from "../models/postModel.js";
 import Story from "../models/storyModel.js";
 import User from "../models/userModel.js";
 import { v2 as cloudinary } from "cloudinary";
 import fs from "fs";
+import sanitizeHtml from "sanitize-html";
 
 const SUPPORTED_FORMATS = {
   image: ["image/jpeg", "image/png", "image/gif", "image/heic"],
@@ -24,20 +25,50 @@ const SUPPORTED_FORMATS = {
 };
 
 const MAX_SIZES = {
-  image: 16 * 1024 * 1024,
-  video: 100 * 1024 * 1024,
-  audio: 16 * 1024 * 1024,
-  document: 2 * 1024 * 1024 * 1024,
+  image: 16 * 1024 * 1024, // 16MB
+  video: 100 * 1024 * 1024, // 100MB
+  audio: 16 * 1024 * 1024, // 16MB
+  document: 2 * 1024 * 1024 * 1024, // 2GB
+};
+
+const uploadToCloudinary = async (filePath, options) => {
+  try {
+    const result = await cloudinary.uploader.upload(filePath, options);
+    return result;
+  } catch (error) {
+    console.error("uploadToCloudinary: Failed", { message: error.message, stack: error.stack });
+    throw new Error(`Cloudinary upload failed: ${error.message}`);
+  } finally {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath); // Clean up temporary file
+    }
+  }
+};
+
+const deleteFromCloudinary = async (publicId, resourceType = "image") => {
+  try {
+    if (!publicId) {
+      console.warn("deleteFromCloudinary: Missing publicId");
+      return;
+    }
+    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+  } catch (error) {
+    console.error("deleteFromCloudinary: Failed", { publicId, message: error.message });
+  }
 };
 
 const createPost = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { postedBy, text, mediaType } = req.body;
     const mediaFile = req.file;
     let mediaUrl, previewUrl, originalFilename;
 
     if (!postedBy || !text) {
-      return res.status(400).json({ error: "PostedBy and text fields are required" });
+      return res.status(400).json({ error: "postedBy and text fields are required" });
     }
 
     const user = await User.findById(postedBy);
@@ -46,24 +77,28 @@ const createPost = async (req, res) => {
     }
 
     if (user._id.toString() !== req.user._id.toString()) {
-      return res.status(401).json({ error: "Unauthorized to create post" });
+      return res.status(403).json({ error: "Unauthorized to create post" });
     }
 
     const maxLength = 500;
-    if (text.length > maxLength) {
+    const sanitizedText = sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} });
+    if (sanitizedText.length > maxLength) {
       return res.status(400).json({ error: `Text must be less than ${maxLength} characters` });
     }
 
-    let detectedMediaType = mediaFile ? mediaType || Object.keys(SUPPORTED_FORMATS).find((key) => SUPPORTED_FORMATS[key].includes(mediaFile.mimetype)) : null;
+    let detectedMediaType = mediaFile
+      ? mediaType && SUPPORTED_FORMATS[mediaType]
+        ? mediaType
+        : Object.keys(SUPPORTED_FORMATS).find((key) => SUPPORTED_FORMATS[key].includes(mediaFile.mimetype))
+      : null;
+
     if (mediaFile && !detectedMediaType) {
-      if (fs.existsSync(mediaFile.path)) fs.unlinkSync(mediaFile.path);
       return res.status(400).json({ error: `Unsupported file format: ${mediaFile.mimetype}. Please upload a valid file.` });
     }
 
     let newPost;
     if (mediaFile) {
       if (mediaFile.size > MAX_SIZES[detectedMediaType]) {
-        if (fs.existsSync(mediaFile.path)) fs.unlinkSync(mediaFile.path);
         return res.status(400).json({
           error: `${detectedMediaType} size exceeds ${(MAX_SIZES[detectedMediaType] / (1024 * 1024)).toFixed(2)}MB limit`,
         });
@@ -71,81 +106,75 @@ const createPost = async (req, res) => {
 
       const uploadOptions = {
         resource_type: detectedMediaType === "video" || detectedMediaType === "audio" ? "video" : detectedMediaType === "document" ? "raw" : "image",
+        folder: detectedMediaType === "document" ? "documents" : "media",
       };
 
-      try {
-        if (detectedMediaType === "document") {
-          const uploadResponse = await cloudinary.uploader.upload(mediaFile.path, {
-            resource_type: "raw",
-            use_filename: true,
-            folder: "documents",
-          });
-          mediaUrl = uploadResponse.secure_url;
-          originalFilename = mediaFile.originalname; // Store original filename
-
-          if (mediaFile.mimetype === "application/pdf") {
-            try {
-              const previewResponse = await cloudinary.uploader.upload(mediaFile.path, {
-                resource_type: "image",
-                transformation: [{ page: 1, format: "jpg", width: 600, crop: "fit" }],
-              });
-              previewUrl = previewResponse.secure_url;
-            } catch (previewError) {
-              console.warn("Failed to generate PDF preview:", previewError.message);
-              previewUrl = null;
-            }
-          } else if (mediaFile.mimetype === "application/zip") {
-            previewUrl = null; // No preview for zip files
-          }
-        } else if (mediaFile.mimetype === "image/heic") {
-          uploadOptions.transformation = [{ fetch_format: "jpg" }];
-          detectedMediaType = "image";
-        } else {
-          const uploadedResponse = await cloudinary.uploader.upload(mediaFile.path, uploadOptions);
-          mediaUrl = uploadedResponse.secure_url;
-          previewUrl = (detectedMediaType === "image" || detectedMediaType === "video") ? uploadedResponse.thumbnail_url : null;
-        }
-
-        if (!mediaUrl) {
-          throw new Error("Upload to Cloudinary failed");
-        }
-
-        newPost = new Post({
-          postedBy,
-          text,
-          media: mediaUrl,
-          mediaType: detectedMediaType,
-          previewUrl,
-          originalFilename: detectedMediaType === "document" ? originalFilename : undefined,
+      if (detectedMediaType === "document") {
+        const uploadResponse = await uploadToCloudinary(mediaFile.path, {
+          ...uploadOptions,
+          use_filename: true,
         });
-        await newPost.save();
-        if (fs.existsSync(mediaFile.path)) fs.unlinkSync(mediaFile.path);
-      } catch (uploadError) {
-        console.error("Cloudinary upload error:", uploadError.message, uploadError.response?.data);
-        if (fs.existsSync(mediaFile.path)) fs.unlinkSync(mediaFile.path);
-        return res.status(500).json({ error: `Failed to upload ${detectedMediaType} file: ${uploadError.message}` });
+        mediaUrl = uploadResponse.secure_url;
+        originalFilename = mediaFile.originalname;
+
+        if (mediaFile.mimetype === "application/pdf") {
+          try {
+            const previewResponse = await cloudinary.uploader.upload(mediaFile.path, {
+              resource_type: "image",
+              transformation: [{ page: 1, format: "jpg", width: 600, crop: "fit" }],
+              folder: "previews",
+            });
+            previewUrl = previewResponse.secure_url;
+          } catch (previewError) {
+            console.warn("createPost: Failed to generate PDF preview", { message: previewError.message });
+            previewUrl = null;
+          }
+        }
+      } else if (mediaFile.mimetype === "image/heic") {
+        uploadOptions.transformation = [{ fetch_format: "jpg" }];
+        detectedMediaType = "image";
+        const uploadResponse = await uploadToCloudinary(mediaFile.path, uploadOptions);
+        mediaUrl = uploadResponse.secure_url;
+        previewUrl = uploadResponse.thumbnail_url;
+      } else {
+        const uploadResponse = await uploadToCloudinary(mediaFile.path, uploadOptions);
+        mediaUrl = uploadResponse.secure_url;
+        previewUrl = detectedMediaType === "image" || detectedMediaType === "video" ? uploadResponse.thumbnail_url : null;
       }
+
+      if (!mediaUrl) {
+        throw new Error("Upload to Cloudinary failed");
+      }
+
+      newPost = new Post({
+        postedBy,
+        text: sanitizedText,
+        media: mediaUrl,
+        mediaType: detectedMediaType,
+        previewUrl,
+        originalFilename: detectedMediaType === "document" ? originalFilename : undefined,
+      });
     } else {
-      newPost = new Post({ postedBy, text });
-      await newPost.save();
+      newPost = new Post({ postedBy, text: sanitizedText });
     }
 
+    await newPost.save();
     const populatedPost = await Post.findById(newPost._id).populate("postedBy", "username profilePic");
+
     if (req.io) {
-      const user = await User.findById(postedBy);
       const followerIds = [...(user.following || []), user._id.toString()];
       followerIds.forEach((followerId) => {
-        const socketId = req.io.getRecipientSocketId(followerId);
+        const socketId = req.io.getRecipientSocketId?.(followerId);
         if (socketId) {
           req.io.to(socketId).emit("newPost", populatedPost);
         }
       });
-      req.io.emit("newFeedPost", populatedPost);
+      req.io.to(`post:${newPost._id}`).emit("newFeedPost", populatedPost);
     }
 
     res.status(201).json(populatedPost);
   } catch (err) {
-    console.error("Error in createPost:", err.message, err.stack);
+    console.error("createPost: Error", { message: err.message, stack: err.stack, postedBy: req.body.postedBy });
     if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     res.status(500).json({ error: `Failed to create post: ${err.message}` });
   }
@@ -153,6 +182,10 @@ const createPost = async (req, res) => {
 
 const createStory = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const mediaFile = req.file;
     const postedBy = req.user._id;
 
@@ -165,39 +198,34 @@ const createStory = async (req, res) => {
       return res.status(404).json({ error: "User not found or banned" });
     }
 
-    let mediaType = Object.keys(SUPPORTED_FORMATS).find((key) => SUPPORTED_FORMATS[key].includes(mediaFile.mimetype));
+    const mediaType = Object.keys(SUPPORTED_FORMATS).find((key) => SUPPORTED_FORMATS[key].includes(mediaFile.mimetype));
     if (!mediaType) {
-      fs.unlinkSync(mediaFile.path);
-      return res.status(400).json({ error: "Unsupported media type" });
+      return res.status(400).json({ error: `Unsupported media type: ${mediaFile.mimetype}` });
+    }
+
+    if (mediaFile.size > MAX_SIZES[mediaType]) {
+      return res.status(400).json({ error: `${mediaType} size exceeds ${(MAX_SIZES[mediaType] / (1024 * 1024)).toFixed(2)}MB limit` });
     }
 
     const uploadOptions = {
       resource_type: mediaType === "video" || mediaType === "audio" ? "video" : "image",
+      folder: "stories",
     };
 
     if (mediaFile.mimetype === "image/heic") {
       uploadOptions.transformation = [{ fetch_format: "jpg" }];
-      mediaType = "image";
     }
 
-    const uploadedResponse = await cloudinary.uploader.upload(mediaFile.path, uploadOptions);
-    const mediaUrl = uploadedResponse.secure_url;
+    const uploadResponse = await uploadToCloudinary(mediaFile.path, uploadOptions);
+    const mediaUrl = uploadResponse.secure_url;
 
-    if (!SUPPORTED_FORMATS[mediaType].includes(uploadedResponse.format)) {
-      await cloudinary.uploader.destroy(uploadedResponse.public_id);
-      fs.unlinkSync(mediaFile.path);
-      return res.status(400).json({ error: `Unsupported ${mediaType} format` });
+    if (!SUPPORTED_FORMATS[mediaType].includes(uploadResponse.format)) {
+      await deleteFromCloudinary(uploadResponse.public_id, uploadOptions.resource_type);
+      return res.status(400).json({ error: `Unsupported ${mediaType} format after upload` });
     }
 
-    if (uploadedResponse.bytes > MAX_SIZES[mediaType]) {
-      await cloudinary.uploader.destroy(uploadedResponse.public_id);
-      fs.unlinkSync(mediaFile.path);
-      return res.status(400).json({ error: `${mediaType} size exceeds ${MAX_SIZES[mediaType] / (1024 * 1024)}MB limit` });
-    }
-
-    if (mediaType === "video" && uploadedResponse.duration > 30) {
-      await cloudinary.uploader.destroy(uploadedResponse.public_id);
-      fs.unlinkSync(mediaFile.path);
+    if (mediaType === "video" && uploadResponse.duration > 30) {
+      await deleteFromCloudinary(uploadResponse.public_id, "video");
       return res.status(400).json({ error: "Story video must be less than 30 seconds" });
     }
 
@@ -205,54 +233,62 @@ const createStory = async (req, res) => {
       postedBy,
       media: mediaUrl,
       mediaType,
-      duration: mediaType === "video" ? uploadedResponse.duration : 0,
-      previewUrl: (mediaType === "image" || mediaType === "video") ? uploadedResponse.thumbnail_url : null,
+      duration: mediaType === "video" ? uploadResponse.duration : 0,
+      previewUrl: mediaType === "image" || mediaType === "video" ? uploadResponse.thumbnail_url : null,
     });
     await newStory.save();
-    fs.unlinkSync(mediaFile.path);
 
     res.status(201).json(newStory);
   } catch (err) {
-    console.error("Error in createStory:", err);
-    if (req.file) fs.unlinkSync(req.file.path);
-    res.status(500).json({ error: err.message });
+    console.error("createStory: Error", { message: err.message, stack: err.stack });
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ error: `Failed to create story: ${err.message}` });
   }
 };
 
 const deletePost = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const post = await Post.findById(req.params.id);
     if (!post) {
       return res.status(404).json({ error: "Post not found" });
     }
 
     if (post.postedBy.toString() !== req.user._id.toString() && !req.user.isAdmin) {
-      return res.status(401).json({ error: "Unauthorized to delete post" });
+      return res.status(403).json({ error: "Unauthorized to delete post" });
     }
 
     if (post.media) {
-      const publicId = post.media.split("/").pop().split(".")[0];
-      await cloudinary.uploader.destroy(publicId);
+      const publicId = post.media.split("/").pop()?.split(".")[0];
+      if (publicId) await deleteFromCloudinary(publicId, post.mediaType === "video" ? "video" : post.mediaType === "document" ? "raw" : "image");
     }
 
     if (post.previewUrl) {
-      const previewPublicId = post.previewUrl.split("/").pop().split(".")[0];
-      await cloudinary.uploader.destroy(previewPublicId);
+      const previewPublicId = post.previewUrl.split("/").pop()?.split(".")[0];
+      if (previewPublicId) await deleteFromCloudinary(previewPublicId, "image");
     }
 
     await Post.findByIdAndDelete(req.params.id);
     if (req.io) {
-      req.io.emit("postDeleted", { postId: req.params.id, userId: post.postedBy });
+      req.io.to(`post:${req.params.id}`).emit("postDeleted", { postId: req.params.id, userId: post.postedBy });
     }
+
     res.status(200).json({ message: "Post deleted successfully" });
   } catch (err) {
-    console.error("Error in deletePost:", err);
-    res.status(500).json({ error: err.message });
+    console.error("deletePost: Error", { message: err.message, stack: err.stack, postId: req.params.id });
+    res.status(500).json({ error: `Failed to delete post: ${err.message}` });
   }
 };
 
 const editPost = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const postId = req.params.id;
     const userId = req.user._id;
     const { text, media, mediaType, previewUrl } = req.body;
@@ -268,18 +304,33 @@ const editPost = async (req, res) => {
 
     let isEdited = post.isEdited || false;
     if (text !== undefined && text !== post.text) {
-      post.text = text;
+      const sanitizedText = sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} });
+      if (sanitizedText.length > 500) {
+        return res.status(400).json({ error: "Text must be less than 500 characters" });
+      }
+      post.text = sanitizedText;
       isEdited = true;
     }
     if (media !== undefined && media !== post.media) {
+      if (post.media) {
+        const publicId = post.media.split("/").pop()?.split(".")[0];
+        if (publicId) await deleteFromCloudinary(publicId, post.mediaType === "video" ? "video" : post.mediaType === "document" ? "raw" : "image");
+      }
       post.media = media;
       isEdited = true;
     }
     if (mediaType !== undefined && mediaType !== post.mediaType) {
+      if (!Object.keys(SUPPORTED_FORMATS).includes(mediaType)) {
+        return res.status(400).json({ error: `Invalid mediaType: ${mediaType}` });
+      }
       post.mediaType = mediaType;
       isEdited = true;
     }
     if (previewUrl !== undefined && previewUrl !== post.previewUrl) {
+      if (post.previewUrl) {
+        const previewPublicId = post.previewUrl.split("/").pop()?.split(".")[0];
+        if (previewPublicId) await deleteFromCloudinary(previewPublicId, "image");
+      }
       post.previewUrl = previewUrl;
       isEdited = true;
     }
@@ -287,32 +338,43 @@ const editPost = async (req, res) => {
     post.isEdited = isEdited;
     await post.save();
 
-    const updatedPost = await Post.findById(postId).populate("postedBy", "username profilePic");
+    const populatedPost = await Post.findById(postId).populate("postedBy", "username profilePic");
     if (req.io) {
-      req.io.to(`post:${postId}`).emit("postUpdated", updatedPost);
+      req.io.to(`post:${postId}`).emit("postUpdated", populatedPost);
     }
-    res.status(200).json(updatedPost);
-  } catch (error) {
-    console.error("Error in editPost:", error);
-    res.status(500).json({ error: error.message });
+
+    res.status(200).json(populatedPost);
+  } catch (err) {
+    console.error("editPost: Error", { message: err.message, stack: err.stack, postId: req.params.id });
+    res.status(500).json({ error: `Failed to edit post: ${err.message}` });
   }
 };
 
 const getPost = async (req, res) => {
   try {
-    const post = await Post.findById(req.params.id).populate("postedBy", "username profilePic");
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const post = await Post.findById(req.params.id)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
     if (!post || post.isBanned) {
       return res.status(404).json({ error: "Post not found or banned" });
     }
     res.status(200).json(post);
   } catch (err) {
-    console.error("Error in getPost:", err);
-    res.status(500).json({ error: err.message });
+    console.error("getPost: Error", { message: err.message, stack: err.stack, postId: req.params.id });
+    res.status(500).json({ error: `Failed to fetch post: ${err.message}` });
   }
 };
 
 const likeUnlikePost = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { id: postId } = req.params;
     const userId = req.user._id;
 
@@ -322,33 +384,48 @@ const likeUnlikePost = async (req, res) => {
     }
 
     const userLikedPost = post.likes.includes(userId);
-
     if (userLikedPost) {
       post.likes.pull(userId);
     } else {
-      post.likes.push(userId);
+      post.likes = [...new Set([...post.likes, userId])];
     }
     await post.save();
 
+    const populatedPost = await Post.findById(postId)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
+
     if (req.io) {
-      req.io.to(`post:${postId}`).emit("likeUnlikePost", { postId, userId, likes: post.likes });
+      req.io.to(`post:${postId}`).emit("likeUnlikePost", {
+        postId,
+        userId,
+        likes: populatedPost.likes,
+        post: populatedPost,
+        reactionType: "thumbs-up",
+        timestamp: Date.now(),
+      });
     }
-    res.status(200).json({ likes: post.likes });
+
+    res.status(200).json({ likes: populatedPost.likes, post: populatedPost });
   } catch (err) {
-    console.error("Error in likeUnlikePost:", err);
-    res.status(500).json({ error: err.message });
+    console.error("likeUnlikePost: Error", { message: err.message, stack: err.stack, postId: req.params.id });
+    res.status(500).json({ error: `Failed to like/unlike post: ${err.message}` });
   }
 };
 
 const bookmarkUnbookmarkPost = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { id: postId } = req.params;
     const userId = req.user._id;
     const post = await Post.findById(postId);
     const user = await User.findById(userId);
 
-    if (!post || !user) {
-      return res.status(404).json({ error: "Post or user not found" });
+    if (!post || !user || post.isBanned) {
+      return res.status(404).json({ error: "Post or user not found, or post is banned" });
     }
 
     const isBookmarked = user.bookmarks.includes(postId);
@@ -362,58 +439,82 @@ const bookmarkUnbookmarkPost = async (req, res) => {
 
     await Promise.all([user.save(), post.save()]);
 
+    const populatedPost = await Post.findById(postId)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
+
     if (req.io) {
-      req.io.emit("bookmarkUnbookmarkPost", {
+      req.io.to(`post:${postId}`).emit("bookmarkUnbookmarkPost", {
         postId,
         userId,
         bookmarked: !isBookmarked,
-        post: { _id: post._id, bookmarks: post.bookmarks },
+        post: populatedPost,
       });
     }
 
     res.status(200).json({
       message: isBookmarked ? "Post unbookmarked" : "Post bookmarked",
       bookmarked: !isBookmarked,
-      bookmarks: post.bookmarks,
+      bookmarks: populatedPost.bookmarks,
+      post: populatedPost,
     });
   } catch (err) {
-    console.error("Error in bookmarkUnbookmarkPost:", err);
-    res.status(500).json({ error: err.message });
+    console.error("bookmarkUnbookmarkPost: Error", { message: err.message, stack: err.stack, postId: req.params.id });
+    res.status(500).json({ error: `Failed to bookmark/unbookmark post: ${err.message}` });
   }
 };
 
-const getBookmarks = async (req, res) => {
-  try {
-    const { username } = req.params;
-    const user = await User.findOne({ username })
-      .populate({
-        path: "bookmarks",
-        match: { isBanned: false },
-        populate: { path: "postedBy", select: "username profilePic" },
-      })
-      .lean();
+// const getBookmarks = async (req, res) => {
+//   try {
+//     if (!req.user) {
+//       return res.status(401).json({ error: "Authentication required" });
+//     }
 
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
+//     const { username } = req.params;
+//     const requestingUser = req.user;
 
-    res.status(200).json(user.bookmarks || []);
-  } catch (err) {
-    console.error("Error in getBookmarks:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
+//     const user = await User.findOne({ username });
+//     if (!user) {
+//       return res.status(404).json({ error: "User not found" });
+//     }
+
+//     // Only allow users to view their own bookmarks or admins to view any
+//     if (user._id.toString() !== requestingUser._id.toString() && !requestingUser.isAdmin) {
+//       return res.status(403).json({ error: "Unauthorized to view bookmarks" });
+//     }
+
+//     const bookmarks = await User.findOne({ username })
+//       .populate({
+//         path: "bookmarks",
+//         match: { isBanned: false },
+//         populate: {
+//           path: "postedBy",
+//           select: "username profilePic",
+//           match: { _id: { $exists: true } },
+//         },
+//       })
+//       .lean();
+
+//     const validBookmarks = bookmarks.bookmarks.filter((post) => post.postedBy) || [];
+//     res.status(200).json(validBookmarks);
+//   } catch (err) {
+//     console.error("getBookmarks: Error", { message: err.message, stack: err.stack, username: req.params.username });
+//     res.status(500).json({ error: `Failed to fetch bookmarks: ${err.message}` });
+//   }
+// };
 
 const commentOnPost = async (req, res) => {
   try {
-    const { text } = req.body;
-    const { postId } = req.params;
-    const userId = req.user._id;
-    const userProfilePic = req.user.profilePic || "";
-    const username = req.user.username || "";
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
 
-    if (!text) {
-      return res.status(400).json({ error: "Text field is required" });
+    const { postId } = req.params;
+    const { text } = req.body;
+    const userId = req.user._id;
+
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: "Comment text is required" });
     }
 
     const post = await Post.findById(postId);
@@ -421,149 +522,52 @@ const commentOnPost = async (req, res) => {
       return res.status(404).json({ error: "Post not found or banned" });
     }
 
+    const user = await User.findById(userId).select("username profilePic");
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
     const comment = {
       userId,
-      text,
-      userProfilePic,
-      username,
-      likes: [],
-      replies: [],
+      text: sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} }),
+      username: user.username,
+      userProfilePic: user.profilePic,
       createdAt: new Date(),
+      likes: [],
+      isEdited: false,
     };
 
     post.comments.push(comment);
     await post.save();
 
-    if (req.io) {
-      req.io.emit("newComment", { postId, comment });
-    }
-    res.status(200).json(comment);
-  } catch (err) {
-    console.error("Error in commentOnPost:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
+    const populatedPost = await Post.findById(postId)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
 
-const replyToComment = async (req, res) => {
-  try {
-    const { text } = req.body;
-    const { postId, commentId } = req.params;
-    const userId = req.user._id;
-    const userProfilePic = req.user.profilePic || "";
-    const username = req.user.username || "";
-
-    if (!text) {
-      return res.status(400).json({ error: "Text field is required" });
-    }
-
-    const post = await Post.findById(postId);
-    if (!post || post.isBanned) {
-      return res.status(404).json({ error: "Post not found or banned" });
-    }
-
-    const comment = post.comments.id(commentId);
-    if (!comment) {
-      return res.status(404).json({ error: "Comment not found" });
-    }
-
-    const reply = {
-      userId,
-      text,
-      userProfilePic,
-      username,
-      likes: [],
-      createdAt: new Date(),
-    };
-    comment.replies.push(reply);
-    await post.save();
+    const newComment = populatedPost.comments[populatedPost.comments.length - 1];
 
     if (req.io) {
-      req.io.emit("newReply", { postId, commentId, reply });
+      req.io.to(`post:${postId}`).emit("newComment", {
+        postId,
+        comment: newComment,
+        post: populatedPost,
+        timestamp: Date.now(),
+      });
     }
-    res.status(200).json(reply);
+
+    res.status(201).json({ comment: newComment, post: populatedPost });
   } catch (err) {
-    console.error("Error in replyToComment:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
-
-const likeUnlikeComment = async (req, res) => {
-  try {
-    const { postId, commentId } = req.params;
-    const userId = req.user._id;
-
-    const post = await Post.findById(postId);
-    if (!post || post.isBanned) {
-      return res.status(404).json({ error: "Post not found or banned" });
-    }
-
-    const comment = post.comments.id(commentId);
-    if (!comment) {
-      return res.status(404).json({ error: "Comment not found" });
-    }
-
-    const userLikedComment = comment.likes.includes(userId);
-
-    if (userLikedComment) {
-      comment.likes.pull(userId);
-    } else {
-      comment.likes.push(userId);
-    }
-    await post.save();
-
-    if (req.io) {
-      req.io.to(`post:${postId}`).emit("likeUnlikeComment", { postId, commentId, likes: comment.likes });
-    }
-    res.status(200).json({ likes: comment.likes });
-  } catch (err) {
-    console.error("Error in likeUnlikeComment:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
-
-const likeUnlikeReply = async (req, res) => {
-  try {
-    const { postId, commentId, replyId } = req.params;
-    const userId = req.user._id;
-
-    const post = await Post.findById(postId);
-    if (!post || post.isBanned) {
-      return res.status(404).json({ error: "Post not found or banned" });
-    }
-
-    const comment = post.comments.id(commentId);
-    if (!comment) {
-      return res.status(404).json({ error: "Comment not found" });
-    }
-
-    const reply = comment.replies.id(replyId);
-    if (!reply) {
-      return res.status(404).json({ error: "Reply not found" });
-    }
-
-    if (!reply.likes) reply.likes = [];
-
-    const userLikedReply = reply.likes.includes(userId);
-
-    if (userLikedReply) {
-      reply.likes.pull(userId);
-    } else {
-      reply.likes.push(userId);
-    }
-    await post.save();
-
-    if (req.io) {
-      req.io.to(`post:${postId}`).emit("likeUnlikeReply", { postId, commentId, replyId, likes: reply.likes });
-    }
-    res.status(200).json({ likes: reply.likes });
-  } catch (err) {
-    console.error("Error in likeUnlikeReply:", err);
-    res.status(500).json({ error: err.message });
+    console.error("commentOnPost: Error", { message: err.message, stack: err.stack, postId: req.params.postId });
+    res.status(500).json({ error: `Failed to add comment: ${err.message}` });
   }
 };
 
 const editComment = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { postId, commentId } = req.params;
     const { text } = req.body;
     const userId = req.user._id;
@@ -578,26 +582,47 @@ const editComment = async (req, res) => {
       return res.status(404).json({ error: "Comment not found" });
     }
 
-    if (comment.userId.toString() !== userId.toString() && post.postedBy.toString() !== userId.toString()) {
+    if (comment.userId.toString() !== userId.toString() && !req.user.isAdmin) {
       return res.status(403).json({ error: "Unauthorized to edit this comment" });
     }
 
-    comment.text = text;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: "Comment text cannot be empty" });
+    }
+
+    comment.text = sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} });
+    comment.isEdited = true;
+    comment.updatedAt = new Date();
     await post.save();
 
+    const populatedPost = await Post.findById(postId)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
+
     if (req.io) {
-      req.io.to(`post:${postId}`).emit("editComment", { postId, commentId, text });
+      req.io.to(`post:${postId}`).emit("editComment", {
+        postId,
+        commentId,
+        comment,
+        post: populatedPost,
+        timestamp: Date.now(),
+      });
     }
-    res.status(200).json(comment);
-  } catch (error) {
-    console.error("Error in editComment:", error);
-    res.status(500).json({ error: error.message });
+
+    res.status(200).json({ comment, post: populatedPost });
+  } catch (err) {
+    console.error("editComment: Error", { message: err.message, stack: err.stack, postId: req.params.postId, commentId: req.params.commentId });
+    res.status(500).json({ error: `Failed to edit comment: ${err.message}` });
   }
 };
 
 const deleteComment = async (req, res) => {
   try {
-    const { postId, commentId, replyId } = req.params;
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { postId, commentId } = req.params;
     const userId = req.user._id;
 
     const post = await Post.findById(postId);
@@ -605,84 +630,181 @@ const deleteComment = async (req, res) => {
       return res.status(404).json({ error: "Post not found or banned" });
     }
 
-    if (replyId) {
-      const comment = post.comments.id(commentId);
-      if (!comment) {
-        return res.status(404).json({ error: "Comment not found" });
-      }
-      const reply = comment.replies.id(replyId);
-      if (!reply) {
-        return res.status(404).json({ error: "Reply not found" });
-      }
-      if (reply.userId.toString() !== userId.toString() && userId.toString() !== post.postedBy.toString()) {
-        return res.status(401).json({ error: "Unauthorized to delete this reply" });
-      }
-      comment.replies.pull({ _id: replyId });
-    } else {
-      const comment = post.comments.id(commentId);
-      if (!comment) {
-        return res.status(404).json({ error: "Comment not found" });
-      }
-      if (comment.userId.toString() !== userId.toString() && userId.toString() !== post.postedBy.toString()) {
-        return res.status(401).json({ error: "Unauthorized to delete this comment" });
-      }
-      post.comments.pull({ _id: commentId });
+    const comment = post.comments.id(commentId);
+    if (!comment) {
+      return res.status(404).json({ error: "Comment not found" });
     }
 
+    if (comment.userId.toString() !== userId.toString() && userId.toString() !== post.postedBy.toString() && !req.user.isAdmin) {
+      return res.status(403).json({ error: "Unauthorized to delete this comment" });
+    }
+
+    post.comments.pull({ _id: commentId });
     await post.save();
-    res.status(200).json({ message: replyId ? "Reply deleted successfully" : "Comment deleted successfully" });
+
+    const populatedPost = await Post.findById(postId)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
+
+    if (req.io) {
+      req.io.to(`post:${postId}`).emit("deleteComment", {
+        postId,
+        commentId,
+        post: populatedPost,
+        timestamp: Date.now(),
+      });
+    }
+
+    res.status(200).json({ message: "Comment deleted successfully", post: populatedPost });
   } catch (err) {
-    console.error("Error in deleteComment:", err);
-    res.status(500).json({ error: err.message });
+    console.error("deleteComment: Error", { message: err.message, stack: err.stack, postId: req.params.postId, commentId: req.params.commentId });
+    res.status(500).json({ error: `Failed to delete comment: ${err.message}` });
   }
 };
 
-const banPost = async (req, res) => {
+const likeUnlikeComment = async (req, res) => {
   try {
-    if (!req.user.isAdmin) return res.status(403).json({ error: "Admin access required" });
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
 
-    const { id } = req.params;
-    const post = await Post.findById(id);
-    if (!post) return res.status(404).json({ error: "Post not found" });
+    const { postId, commentId } = req.params;
+    const userId = req.user._id;
 
-    post.isBanned = true;
-    post.bannedBy = req.user._id;
+    const post = await Post.findById(postId);
+    if (!post || post.isBanned) {
+      return res.status(404).json({ error: "Post not found or banned" });
+    }
+
+    const comment = post.comments.id(commentId);
+    if (!comment) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+
+    const userLikedComment = comment.likes.includes(userId);
+    if (userLikedComment) {
+      comment.likes.pull(userId);
+    } else {
+      comment.likes = [...new Set([...comment.likes, userId])];
+    }
     await post.save();
 
+    const populatedPost = await Post.findById(postId)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
+
     if (req.io) {
-      req.io.to(`post:${id}`).emit("postBanned", { postId: id });
+      req.io.to(`post:${postId}`).emit("likeUnlikeComment", {
+        postId,
+        commentId,
+        userId,
+        likes: comment.likes,
+        post: populatedPost,
+        timestamp: Date.now(),
+      });
     }
-    res.status(200).json({ message: "Post banned successfully" });
+
+    res.status(200).json({ likes: comment.likes, post: populatedPost });
   } catch (err) {
-    console.error("Error in banPost:", err);
-    res.status(500).json({ error: err.message });
+    console.error("likeUnlikeComment: Error", { message: err.message, stack: err.stack, postId: req.params.postId, commentId: req.params.commentId });
+    res.status(500).json({ error: `Failed to like/unlike comment: ${err.message}` });
+  }
+};
+
+// postController.js (updated ban/unban functions)
+const banPost = async (req, res) => {
+  try {
+    if (!req.user || !req.user.isAdmin) {
+      return res.status(403).json({ error: "Only admin can ban posts" });
+    }
+
+    const post = await Post.findById(req.params.id);
+    if (!post) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    if (post.isBanned) {
+      return res.status(400).json({ error: "Post is already banned" });
+    }
+
+    post.isBanned = true;
+    await post.save();
+
+    const populatedPost = await Post.findById(post._id)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
+
+    if (req.io) {
+      req.io.to(`post:${post._id}`).emit("postBanned", {
+        postId: post._id,
+        post: populatedPost,
+      });
+    }
+
+    res.status(200).json({
+      message: "Post banned successfully",
+      post: populatedPost,
+    });
+  } catch (err) {
+    console.error("banPost: Error", {
+      message: err.message,
+      stack: err.stack,
+      postId: req.params.id,
+    });
+    res.status(500).json({ error: `Failed to ban post: ${err.message}` });
   }
 };
 
 const unbanPost = async (req, res) => {
   try {
-    if (!req.user.isAdmin) return res.status(403).json({ error: "Admin access required" });
+    if (!req.user || !req.user.isAdmin) {
+      return res.status(403).json({ error: "Only admin can unban posts" });
+    }
 
-    const { id } = req.params;
-    const post = await Post.findById(id);
-    if (!post) return res.status(404).json({ error: "Post not found" });
+    const post = await Post.findById(req.params.id);
+    if (!post) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    if (!post.isBanned) {
+      return res.status(400).json({ error: "Post is not banned" });
+    }
 
     post.isBanned = false;
-    post.bannedBy = null;
     await post.save();
 
+    const populatedPost = await Post.findById(post._id)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
+
     if (req.io) {
-      req.io.to(`post:${id}`).emit("postUnbanned", { postId: id });
+      req.io.to(`post:${post._id}`).emit("postUnbanned", {
+        postId: post._id,
+        post: populatedPost,
+      });
     }
-    res.status(200).json({ message: "Post unbanned successfully" });
+
+    res.status(200).json({
+      message: "Post unbanned successfully",
+      post: populatedPost,
+    });
   } catch (err) {
-    console.error("Error in unbanPost:", err);
-    res.status(500).json({ error: err.message });
+    console.error("unbanPost: Error", {
+      message: err.message,
+      stack: err.stack,
+      postId: req.params.id,
+    });
+    res.status(500).json({ error: `Failed to unban post: ${err.message}` });
   }
 };
 
+
 const getFeedPosts = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const userId = req.user._id;
     const user = await User.findById(userId);
     if (!user) {
@@ -690,143 +812,167 @@ const getFeedPosts = async (req, res) => {
     }
 
     const following = user.following || [];
-    const feedPosts = await Post.find({
+    const posts = await Post.find({
       postedBy: { $in: [...following, userId] },
       isBanned: false,
     })
       .sort({ createdAt: -1 })
-      .populate("postedBy", "username profilePic");
+      .populate({
+        path: "postedBy",
+        select: "username profilePic",
+        match: { _id: { $exists: true } },
+      })
+      .populate({
+        path: "comments.userId",
+        select: "username profilePic",
+        match: { _id: { $exists: true } },
+      });
 
-    res.status(200).json(feedPosts);
-  } catch (error) {
-    console.error("Error in getFeedPosts:", error);
-    res.status(500).json({ error: error.message });
+    const validPosts = posts.filter((post) => post.postedBy);
+    res.status(200).json(validPosts);
+  } catch (err) {
+    console.error("getFeedPosts: Error", { message: err.message, stack: err.stack, userId: req.user?._id });
+    res.status(500).json({ error: `Failed to fetch feed posts: ${err.message}` });
   }
 };
 
-const getUserPosts = async (req, res) => {
+ const getUserPosts = async (req, res) => {
   try {
-    const { username } = req.params;
-    const user = await User.findOne({ username });
+    console.log("getUserPosts: User from req:", req.user); // Debug
+    if (!req.user) {
+      console.log("getUserPosts: No req.user, authentication required");
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const user = await User.findOne({ username: req.params.username });
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
+    const requestingUser = req.user;
+    if (user._id.toString() !== requestingUser._id.toString() && !requestingUser.isAdmin) {
+      return res.status(403).json({ error: "Unauthorized to view this user's posts" });
+    }
+
     const posts = await Post.find({ postedBy: user._id, isBanned: false })
-      .sort({ createdAt: -1 })
-      .populate("postedBy", "username profilePic");
+      .populate("postedBy", "username profilePic")
+      .sort({ createdAt: -1 });
 
     res.status(200).json(posts);
   } catch (error) {
-    console.error("Error in getUserPosts:", error);
-    res.status(500).json({ error: error.message });
+    console.error("getUserPosts error:", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+ const getBookmarks = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const user = await User.findOne({ username: req.params.username });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (user._id.toString() !== req.user._id.toString() && !req.user.isAdmin) {
+      return res.status(403).json({ error: "Unauthorized to view this user's bookmarks" });
+    }
+
+    const posts = await Post.find({ _id: { $in: user.bookmarks }, isBanned: false })
+      .populate("postedBy", "username profilePic")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json(posts);
+  } catch (error) {
+    console.error("getBookmarks error:", error.message);
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
 const getAllPosts = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     if (!req.user.isAdmin) {
       return res.status(403).json({ error: "Admin access required" });
     }
 
     const posts = await Post.find({})
       .sort({ createdAt: -1 })
-      .populate("postedBy", "username profilePic name isAdmin")
-      .lean();
+      .populate({
+        path: "postedBy",
+        select: "username profilePic",
+        match: { _id: { $exists: true } },
+      })
+      .populate({
+        path: "comments.userId",
+        select: "username profilePic",
+        match: { _id: { $exists: true } },
+      });
 
-    res.status(200).json(posts);
-  } catch (error) {
-    console.error("Error in getAllPosts:", error);
-    res.status(500).json({ error: error.message });
-  }
-};
-
-const getStories = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const following = user.following || [];
-    const stories = await Story.find({ postedBy: { $in: [...following, userId] } }).sort({
-      createdAt: -1,
-    });
-
-    res.status(200).json(stories);
+    const validPosts = posts.filter((post) => post.postedBy);
+    res.status(200).json(validPosts);
   } catch (err) {
-    console.error("Error in getStories:", err);
-    res.status(500).json({ error: err.message });
+    console.error("getAllPosts: Error", { message: err.message, stack: err.stack, userId: req.user?._id });
+    res.status(500).json({ error: `Failed to fetch all posts: ${err.message}` });
   }
 };
 
-const replyToPost = async (req, res) => {
+const getPaginatedComments = async (req, res) => {
   try {
-    const { text } = req.body;
-    const { postId } = req.params;
-    const userId = req.user._id;
-    const userProfilePic = req.user.profilePic || "";
-    const username = req.user.username || "";
-
-    if (!text) {
-      return res.status(400).json({ error: "Text field is required" });
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
     }
+
+    const { postId } = req.params;
+    const { page = 1, limit = 10 } = req.query;
 
     const post = await Post.findById(postId);
     if (!post || post.isBanned) {
       return res.status(404).json({ error: "Post not found or banned" });
     }
 
-    const reply = { userId, text, userProfilePic, username, createdAt: new Date() };
-    post.replies = post.replies || [];
-    post.replies.push(reply);
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const populatedPost = await Post.findById(postId)
+      .populate({
+        path: "postedBy",
+        select: "username profilePic",
+        match: { _id: { $exists: true } },
+      })
+      .populate({
+        path: "comments.userId",
+        select: "username profilePic",
+        match: { _id: { $exists: true } },
+      });
 
-    await post.save();
-    if (req.io) {
-      req.io.to(`post:${postId}`).emit("newReply", { postId, reply });
-    }
-    res.status(200).json(reply);
-  } catch (err) {
-    console.error("Error in replyToPost:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
-
-const repostPost = async (req, res) => {
-  try {
-    const { postId } = req.params;
-    const userId = req.user._id;
-
-    const originalPost = await Post.findById(postId);
-    if (!originalPost || originalPost.isBanned) {
-      return res.status(404).json({ error: "Post not found or banned" });
+    if (!populatedPost.postedBy) {
+      return res.status(200).json({
+        comments: [],
+        totalComments: 0,
+        message: "Comments fetched, but postedBy is invalid",
+      });
     }
 
-    const repost = new Post({
-      postedBy: userId,
-      text: originalPost.text,
-      media: originalPost.media,
-      mediaType: originalPost.mediaType,
-      previewUrl: originalPost.previewUrl,
-      originalPost: postId,
-      isRepost: true,
+    res.status(200).json({
+      comments: populatedPost.comments.slice(skip, skip + parseInt(limit)),
+      totalComments: populatedPost.comments.length,
     });
-    await repost.save();
-
-    if (req.io) {
-      const populatedRepost = await Post.findById(repost._id).populate("postedBy", "username profilePic");
-      req.io.emit("newPost", populatedRepost);
-    }
-    res.status(201).json(repost);
-  } catch (error) {
-    console.error("Error in repostPost:", error);
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error("getPaginatedComments: Error", { message: err.message, stack: err.stack, postId: req.params.postId });
+    res.status(500).json({ error: `Failed to fetch comments: ${err.message}` });
   }
 };
 
-const getSuggestedPosts = async (req, res) => {
+const getStories = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const userId = req.user._id;
     const user = await User.findById(userId);
     if (!user) {
@@ -834,18 +980,52 @@ const getSuggestedPosts = async (req, res) => {
     }
 
     const following = user.following || [];
-    const suggestedPosts = await Post.find({
+    const stories = await Story.find({ postedBy: { $in: [...following, userId] } })
+      .sort({ createdAt: -1 })
+      .populate("postedBy", "username profilePic");
+
+    res.status(200).json(stories);
+  } catch (err) {
+    console.error("getStories: Error", { message: err.message, stack: err.stack, userId: req.user._id });
+    res.status(500).json({ error: `Failed to fetch stories: ${err.message}` });
+  }
+};
+
+const getSuggestedPosts = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const userId = req.user._id;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const following = user.following || [];
+    const posts = await Post.find({
       postedBy: { $nin: [userId, ...following] },
       isBanned: false,
     })
       .sort({ createdAt: -1 })
       .limit(10)
-      .populate("postedBy", "username profilePic");
+      .populate({
+        path: "postedBy",
+        select: "username profilePic",
+        match: { _id: { $exists: true } },
+      })
+      .populate({
+        path: "comments.userId",
+        select: "username profilePic",
+        match: { _id: { $exists: true } },
+      });
 
-    res.status(200).json(suggestedPosts);
-  } catch (error) {
-    console.error("Error in getSuggestedPosts:", error);
-    res.status(500).json({ error: error.message });
+    const validPosts = posts.filter((post) => post.postedBy);
+    res.status(200).json(validPosts);
+  } catch (err) {
+    console.error("getSuggestedPosts: Error", { message: err.message, stack: err.stack, userId: req.user._id });
+    res.status(500).json({ error: `Failed to fetch suggested posts: ${err.message}` });
   }
 };
 
@@ -858,9 +1038,7 @@ export {
   bookmarkUnbookmarkPost,
   getBookmarks,
   commentOnPost,
-  replyToComment,
   likeUnlikeComment,
-  likeUnlikeReply,
   editComment,
   deleteComment,
   banPost,
@@ -869,8 +1047,7 @@ export {
   getUserPosts,
   getAllPosts,
   getStories,
-  replyToPost,
   editPost,
-  repostPost,
   getSuggestedPosts,
+  getPaginatedComments,
 };

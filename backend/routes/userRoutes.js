@@ -32,7 +32,12 @@ router.post("/signup", signupUser);
 router.post("/login", loginUser);
 router.post("/admin/login", adminLogin);
 router.post("/logout", logoutUser);
-router.post("/follow/:id", protectRoute, followUnFollowUser);
+console.log("Registering user routes, including POST /follow/:id");
+router.post('/follow/:id', protectRoute, (req, res, next) => {
+  console.log(`Handling POST /follow/${req.params.id}`);
+  followUnFollowUser(req, res, next);
+});
+// router.post("/api/users/:id/follow", protectRoute, followUnFollowUser);
 router.post("/multiple", protectRoute, getMultipleUsers); // Use protectRoute
 router.put("/update", protectRoute, upload.single("profilePic"), updateUser);
 router.put("/freeze", protectRoute, freezeAccount);

@@ -1,5 +1,5 @@
 import User from "../models/userModel.js";
-import Post from "../models/postModel.js";
+import { Post } from "../models/postModel.js";
 import bcrypt from "bcryptjs";
 import generateTokenAndSetCookie from "../utils/helpers/generateTokenAndSetCookie.js";
 import { v2 as cloudinary } from "cloudinary";
@@ -60,58 +60,7 @@ const getMultipleUsers = async (req, res) => {
   }
 };
 
-const followUser = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user._id;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "Invalid user ID" });
-    }
-
-    const [userToFollow, currentUser] = await Promise.all([
-      User.findById(id),
-      User.findById(userId),
-    ]);
-
-    if (!userToFollow || !currentUser) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    if (userId.toString() === id) {
-      return res.status(400).json({ error: "Cannot follow/unfollow yourself" });
-    }
-
-    const isFollowing = currentUser.following.includes(id);
-    if (isFollowing) {
-      currentUser.following.pull(id);
-      userToFollow.followers.pull(userId);
-      await Promise.all([currentUser.save(), userToFollow.save()]);
-      if (req.io) {
-        req.io.emit("userUnfollowed", { unfollowedId: id, followerId: userId });
-      }
-    } else {
-      currentUser.following.push(id);
-      userToFollow.followers.push(userId);
-      await Promise.all([currentUser.save(), userToFollow.save()]);
-      if (req.io) {
-        req.io.emit("userFollowed", {
-          followedId: id,
-          follower: {
-            _id: userId,
-            username: currentUser.username,
-            profilePic: currentUser.profilePic,
-            name: currentUser.name,
-          },
-        });
-      }
-    }
-    res.status(200).json({ message: isFollowing ? "Unfollowed" : "Followed" });
-  } catch (err) {
-    console.error("Error in followUser:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
 
 const getUserStats = async (req, res) => {
   try {
@@ -248,7 +197,7 @@ const adminLogin = async (req, res) => {
       adminUser = new User({
         name: "Admin Blog",
         username: ADMIN_USERNAME,
-        email: "admin@threadsclone.com",
+        email: "admin@NRBLOGclone.com",
         password: hashedPassword,
         isAdmin: true,
       });
@@ -324,6 +273,10 @@ const followUnFollowUser = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
+    if (userToFollow.isBanned) {
+      return res.status(403).json({ error: "Cannot follow a banned user" });
+    }
+
     userToFollow.followers = Array.isArray(userToFollow.followers) ? userToFollow.followers : [];
     currentUser.following = Array.isArray(currentUser.following) ? currentUser.following : [];
 
@@ -334,7 +287,32 @@ const followUnFollowUser = async (req, res) => {
       userToFollow.followers = userToFollow.followers.filter((userId) => userId.toString() !== currentUserId.toString());
       await Promise.all([currentUser.save(), userToFollow.save()]);
       if (req.io) {
-        req.io.emit("userUnfollowed", { unfollowedId: id, followerId: currentUserId });
+        const unfollowData = {
+          unfollowedId: id,
+          follower: {
+            _id: currentUserId,
+            username: currentUser.username,
+            profilePic: currentUser.profilePic,
+            name: currentUser.name,
+          },
+        };
+        // Emit to the unfollowed user
+        const unfollowedSocketId = req.io.getRecipientSocketId(id);
+        if (unfollowedSocketId) {
+          req.io.to(unfollowedSocketId).emit("userUnfollowed", unfollowData);
+        }
+        // Emit to the current user
+        const currentUserSocketId = req.io.getRecipientSocketId(currentUserId.toString());
+        if (currentUserSocketId) {
+          req.io.to(currentUserSocketId).emit("userUnfollowed", unfollowData);
+        }
+        // Notify followers of the unfollowed user
+        userToFollow.followers.forEach((followerId) => {
+          const socketId = req.io.getRecipientSocketId(followerId.toString());
+          if (socketId) {
+            req.io.to(socketId).emit("userUnfollowed", unfollowData);
+          }
+        });
       }
       res.status(200).json({ message: "Unfollowed successfully" });
     } else {
@@ -342,7 +320,7 @@ const followUnFollowUser = async (req, res) => {
       userToFollow.followers.push(currentUserId);
       await Promise.all([currentUser.save(), userToFollow.save()]);
       if (req.io) {
-        req.io.emit("userFollowed", {
+        const followData = {
           followedId: id,
           follower: {
             _id: currentUserId,
@@ -350,15 +328,34 @@ const followUnFollowUser = async (req, res) => {
             profilePic: currentUser.profilePic,
             name: currentUser.name,
           },
+        };
+        // Emit to the followed user
+        const followedSocketId = req.io.getRecipientSocketId(id);
+        if (followedSocketId) {
+          req.io.to(followedSocketId).emit("userFollowed", followData);
+        }
+        // Emit to the current user
+        const currentUserSocketId = req.io.getRecipientSocketId(currentUserId.toString());
+        if (currentUserSocketId) {
+          req.io.to(currentUserSocketId).emit("userFollowed", followData);
+        }
+        // Notify followers of the followed user
+        userToFollow.followers.forEach((followerId) => {
+          const socketId = req.io.getRecipientSocketId(followerId.toString());
+          if (socketId) {
+            req.io.to(socketId).emit("userFollowed", followData);
+          }
         });
       }
       res.status(200).json({ message: "Followed successfully" });
     }
   } catch (error) {
     console.error("Follow/Unfollow error:", error);
-    res.status(500).json({ error: error.message || "Internal server error" });
+    res.status(500).json({ error: `Failed to ${isFollowing ? "unfollow" : "follow"} user: ${error.message}` });
   }
 };
+
+
 
 
 const updateUser = async (req, res) => {
@@ -648,6 +645,6 @@ export {
   getUserStats,
   getAdminRealtimeDashboard,
   getMultipleUsers,
-  followUser,
+ 
   getAllUsers,
 };

@@ -71,7 +71,7 @@ const UserHeader = ({ user }) => {
           <Stack direction="row" gap={2} alignItems="center">
             <Typography variant="body2">{user.username}</Typography>
             <Typography variant="caption" bgcolor="gray" color="white" p={1} borderRadius="16px">
-              threads.net
+              NRBLOG.net
             </Typography>
           </Stack>
         </Box>
@@ -134,7 +134,7 @@ const UserHeader = ({ user }) => {
 
       <Stack direction="row" width="100%">
         <Stack flex={1} borderBottom="1.5px solid white" justifyContent="center" pb="3" sx={{ cursor: 'pointer' }}>
-          <Typography fontWeight="bold">Threads</Typography>
+          <Typography fontWeight="bold">NRBLOG</Typography>
         </Stack>
         <Stack flex={1} borderBottom="1px solid gray" justifyContent="center" color="gray" pb="3" sx={{ cursor: 'pointer' }}>
           <Typography fontWeight="bold">Replies</Typography>

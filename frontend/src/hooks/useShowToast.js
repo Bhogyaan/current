@@ -1,17 +1,42 @@
 // hooks/useShowToast.js
-import { useSnackbar } from "notistack";
-import { useCallback } from "react";
+import { toast } from 'react-toastify';
+import { useCallback } from 'react';
 
 const useShowToast = () => {
-  const { enqueueSnackbar } = useSnackbar();
-
   const showToast = useCallback(
-    (message, description = "", variant = "default") => {
-      enqueueSnackbar(`${message}${description ? ` - ${description}` : ""}`, {
-        variant, // 'success' | 'error' | 'warning' | 'info' | 'default'
-      });
+    (message, description = "", type = "default") => {
+      const toastOptions = {
+        position: "top-right",
+        autoClose: 5000,
+        hideProgressBar: false,
+        closeOnClick: true,
+        pauseOnHover: true,
+        draggable: true,
+        progress: undefined,
+      };
+
+      const fullMessage = `${message}${description ? ` - ${description}` : ""}`;
+
+      switch (type) {
+        case 'success':
+          toast.success(fullMessage, toastOptions);
+          break;
+        case 'error':
+          toast.error(fullMessage, toastOptions);
+          break;
+        case 'warning':
+          toast.warning(fullMessage, toastOptions);
+          break;
+        case 'info':
+          toast.info(fullMessage, toastOptions);
+          break;
+        case 'default':
+        default:
+          toast(fullMessage, toastOptions);
+          break;
+      }
     },
-    [enqueueSnackbar]
+    []
   );
 
   return showToast;

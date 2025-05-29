@@ -1,68 +1,273 @@
-import { useEffect, useState } from "react";
+import React, { useState, useEffect, useContext } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  Box,
+  Card,
+  CardContent,
+  Grid,
+  Typography,
+  Button,
+  CircularProgress,
+  Menu,
+  MenuItem,
+  IconButton,
+} from "@mui/material";
+import {
+  Dashboard,
+  BarChart as BarChartIcon,
+  TrendingUp,
+  MoreVert,
+  Gavel,
+} from "@mui/icons-material";
+import { motion } from "framer-motion";
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { SocketContext } from "../context/SocketContext";
+import useShowToast from "../hooks/useShowToast";
 import { useRecoilValue } from "recoil";
 import userAtom from "../atoms/userAtom";
 import {
-  Box,
-  Typography,
-  useMediaQuery,
-  CircularProgress,
-} from "@mui/material";
-import { motion } from "framer-motion";
-import useShowToast from "../hooks/useShowToast";
-import {
-  PieChart,
-  Pie,
-  Cell,
-  Tooltip,
-  Legend,
   BarChart,
   Bar,
   XAxis,
   YAxis,
-  LineChart,
-  Line,
   CartesianGrid,
-  ScatterChart,
-  Scatter,
-  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  Legend as RechartsLegend,
+  ResponsiveContainer as BarResponsiveContainer,
 } from "recharts";
-import ReactHeatmap from "react-heatmap-grid";
 
-const COLORS = ["#1976D2", "#4CAF50", "#D32F2F"]; // primary.main, success.main, error.main
+const COLORS = ["#8515fe", "#8b5cf6", "#f44336", "#ff9800"];
 
 const AdminDashboard = () => {
-  const currentUser = useRecoilValue(userAtom);
-  const [analytics, setAnalytics] = useState(null);
-  const [loadingAnalytics, setLoadingAnalytics] = useState(true);
   const showToast = useShowToast();
-  const isSmallScreen = useMediaQuery("(max-width: 600px)");
-  const isMediumScreen = useMediaQuery("(max-width: 960px)");
+  const currentUser = useRecoilValue(userAtom);
+  const socket = useContext(SocketContext);
+  const navigate = useNavigate();
+  const [analytics, setAnalytics] = useState(null);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [anchorEl, setAnchorEl] = useState(null);
+  const [selectedPost, setSelectedPost] = useState(null);
+  const [error, setError] = useState(null);
+
+  const defaultAnalytics = {
+    totalPosts: 0,
+    totalUsers: 0,
+    totalLikes: 0,
+    totalComments: 0,
+    bannedPosts: 0,
+    bannedUsers: 0,
+    activityData: [],
+    userActivity: [],
+    recentPosts: [],
+  };
+
+  const refreshToken = async () => {
+    try {
+      const res = await fetch("/api/auth/refresh-token", {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.token) {
+        localStorage.setItem("token", data.token);
+        return data.token;
+      }
+      throw new Error("Failed to refresh token");
+    } catch (error) {
+      console.error("Token refresh failed:", error);
+      return null;
+    }
+  };
+
+  const fetchAnalytics = async (retries = 3, delay = 1000) => {
+    try {
+      setLoadingAnalytics(true);
+      let token = localStorage.getItem("token");
+      if (!token) {
+        token = await refreshToken();
+        if (!token) throw new Error("No authentication token found");
+      }
+
+      const res = await fetch("/api/posts/admin/stats", {
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
+      });
+
+      if (res.status === 401 && retries > 0) {
+        const newToken = await refreshToken();
+        if (newToken) {
+          localStorage.setItem("token", newToken);
+          return fetchAnalytics(retries - 1, delay * 2);
+        }
+        throw new Error("Unauthorized access. Please log in again.");
+      }
+
+      if (!res.ok) {
+        throw new Error(`Failed to fetch analytics: HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setAnalytics(data);
+      localStorage.setItem("cachedAnalytics", JSON.stringify(data));
+    } catch (error) {
+      if (retries > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return fetchAnalytics(retries - 1, delay * 2);
+      }
+      console.error("Failed to fetch analytics:", error.message);
+      setError(error.message);
+      showToast("Error", error.message, "error");
+    } finally {
+      setLoadingAnalytics(false);
+    }
+  };
+
+  const handleToggleBanPost = async (postId, isBanned) => {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`/api/posts/${postId}/ban`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        throw new Error("Failed to update post status");
+      }
+      const updatedPost = await res.json();
+      showToast(
+        "Success",
+        `Post ${isBanned ? "unbanned" : "banned"} successfully`,
+        "success"
+      );
+      setAnalytics((prev) => ({
+        ...prev,
+        bannedPosts: prev.bannedPosts + (isBanned ? -1 : 1),
+        recentPosts: prev.recentPosts.map((p) =>
+          p._id === postId ? { ...p, isBanned: !isBanned } : p
+        ),
+      }));
+      if (socket) {
+        socket.emit("postStatusUpdate", { postId, isBanned: !isBanned });
+      }
+    } catch (error) {
+      showToast("Error", error.message, "error");
+    }
+  };
+
+  const handleToggleBanUser = async (userId, isBanned) => {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`/api/users/${userId}/ban`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        throw new Error("Failed to update user status");
+      }
+      const updatedUser = await res.json();
+      showToast(
+        "Success",
+        `User ${isBanned ? "unbanned" : "banned"} successfully`,
+        "success"
+      );
+      setAnalytics((prev) => ({
+        ...prev,
+        bannedUsers: prev.bannedUsers + (isBanned ? -1 : 1),
+        recentPosts: prev.recentPosts.map((p) =>
+          p.postedBy._id === userId ? { ...p, postedBy: { ...p.postedBy, isBanned: !isBanned } } : p
+        ),
+      }));
+      if (socket) {
+        socket.emit("userStatusUpdate", { userId, isBanned: !isBanned });
+      }
+    } catch (error) {
+      showToast("Error", error.message, "error");
+    }
+  };
+
+  const handleMenuOpen = (event, post) => {
+    setAnchorEl(event.currentTarget);
+    setSelectedPost(post);
+  };
+
+  const handleMenuClose = () => {
+    setAnchorEl(null);
+    setSelectedPost(null);
+  };
 
   useEffect(() => {
     if (!currentUser?.isAdmin) return;
-
-    const fetchAnalytics = async () => {
-      try {
-        const res = await fetch("/api/stats/admin", {
-          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-          credentials: "include",
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        setAnalytics(data);
-      } catch (error) {
-        showToast("Error", error.message, "error");
-      } finally {
-        setLoadingAnalytics(false);
+    if (!analytics) {
+      setLoadingAnalytics(true);
+      const cachedAnalytics = localStorage.getItem("cachedAnalytics");
+      if (cachedAnalytics) {
+        setAnalytics(JSON.parse(cachedAnalytics));
+      } else {
+        setAnalytics(defaultAnalytics);
       }
+      fetchAnalytics();
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!socket || typeof socket.on !== "function") return;
+
+    const handleAnalyticsUpdate = (update) => {
+      setAnalytics((prev) => ({
+        ...prev,
+        totalPosts: (prev.totalPosts || 0) + (update.totalPosts || 0),
+        totalLikes: (prev.totalLikes || 0) + (update.totalLikes || 0),
+        totalComments: (prev.totalComments || 0) + (update.totalComments || 0),
+        bannedPosts: (prev.bannedPosts || 0) + (update.bannedPosts || 0),
+        bannedUsers: (prev.bannedUsers || 0) + (update.bannedUsers || 0),
+        recentPosts: update.recentPosts || prev.recentPosts,
+      }));
     };
 
-    fetchAnalytics();
-  }, [currentUser, showToast]);
+    const handlePostStatusUpdate = ({ postId, isBanned }) => {
+      setAnalytics((prev) => ({
+        ...prev,
+        bannedPosts: prev.bannedPosts + (isBanned ? 1 : -1),
+        recentPosts: prev.recentPosts.map((p) =>
+          p._id === postId ? { ...p, isBanned } : p
+        ),
+      }));
+    };
+
+    const handleUserStatusUpdate = ({ userId, isBanned }) => {
+      setAnalytics((prev) => ({
+        ...prev,
+        bannedUsers: prev.bannedUsers + (isBanned ? 1 : -1),
+        recentPosts: prev.recentPosts.map((p) =>
+          p.postedBy._id === userId ? { ...p, postedBy: { ...p.postedBy, isBanned } } : p
+        ),
+      }));
+    };
+
+    socket.on("analyticsUpdate", handleAnalyticsUpdate);
+    socket.on("postStatusUpdate", handlePostStatusUpdate);
+    socket.on("userStatusUpdate", handleUserStatusUpdate);
+
+    return () => {
+      if (typeof socket.off === "function") {
+        socket.off("analyticsUpdate", handleAnalyticsUpdate);
+        socket.off("postStatusUpdate", handlePostStatusUpdate);
+        socket.off("userStatusUpdate", handleUserStatusUpdate);
+      }
+    };
+  }, [socket]);
 
   if (!currentUser?.isAdmin) {
     return (
-      <Box sx={{ p: 3, textAlign: "center", m: 4 }}>
+      <Box sx={{ p: 3, textAlign: "center", bgcolor: "background.paper", borderRadius: 2 }}>
         <Typography variant="h6" color="text.primary">
           Admin access required
         </Typography>
@@ -70,88 +275,79 @@ const AdminDashboard = () => {
     );
   }
 
-  // Existing data for Pie, Bar, and Line Charts
-  const pieData = analytics
-    ? [
-        { name: "Likes", value: analytics.totalLikes || 0 },
-        { name: "Posts", value: analytics.totalPosts || 0 },
-        { name: "Comments", value: analytics.totalComments || 0 },
-      ]
-    : [];
-  const barData = analytics?.activityData || [];
-  const lineData = analytics?.activityData || [];
+  if (loadingAnalytics) {
+    return (
+      <Box sx={{ display: "flex", justifyContent: "center", p: 3 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
 
-  // Mock data for Scatter Plot (posts vs. likes per user)
-  const scatterData = analytics
-    ? (analytics.userActivity || []).map((user, index) => ({
-        userId: index,
-        posts: user.posts || Math.floor(Math.random() * 50),
-        likes: user.likes || Math.floor(Math.random() * 200),
-      }))
-    : [];
+  if (error || !analytics || !Object.keys(analytics).length) {
+    return (
+      <Box sx={{ p: 3, textAlign: "center", bgcolor: "background.paper", borderRadius: 2 }}>
+        <Typography variant="h6" color="text.primary">
+          {error || "Unable to load analytics data. Please try refreshing the page or contact support."}
+        </Typography>
+        <Button
+          variant="contained"
+          onClick={() => {
+            setError(null);
+            fetchAnalytics();
+          }}
+          sx={{ mt: 2 }}
+        >
+          Retry
+        </Button>
+      </Box>
+    );
+  }
 
-  // Mock data for Heatmap (activity by day/hour)
-  const heatmapData = analytics
-    ? Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => Math.floor(Math.random() * 100)))
-    : Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => Math.floor(Math.random() * 100)));
+  const pieData = [
+    { name: "Total Posts", value: analytics.totalPosts || 0 },
+    { name: "Total Users", value: analytics.totalUsers || 0 },
+    { name: "Banned Posts", value: analytics.bannedPosts || 0 },
+    { name: "Banned Users", value: analytics.bannedUsers || 0 },
+  ];
+
+  const barData = analytics.activityData || [];
+  const isSmallScreen = window.innerWidth < 600;
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
-      <Box sx={{ m: 2, minHeight: "100vh", width: "100%", overflowX: "hidden" }}>
-        <Typography
-          variant="h4"
-          sx={{
-            mb: 3,
-            color: "text.primary",
-            fontWeight: 600,
-            p: isSmallScreen ? 1 : 2,
-            textAlign: "center",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            maxWidth: "100%",
-          }}
-        >
-          Admin Dashboard
-        </Typography>
-        <Box
-          sx={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-            width: "90%",
-            maxWidth: 1200,
-            mx: "auto",
-            overflowX: "hidden",
-          }}
-        >
-          {loadingAnalytics ? (
-            <CircularProgress sx={{ color: "primary.main", p: isSmallScreen ? 1 : 2, m: "auto" }} />
-          ) : (
-            <>
-              {/* Pie Chart: Platform Engagement */}
-              <Box
-                sx={{
-                  bgcolor: "background.paper",
-                  borderRadius: "16px",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
-                  width: "100%",
-                  p: isSmallScreen ? 1.5 : 2,
-                  boxSizing: "border-box",
-                  maxWidth: isSmallScreen ? "100%" : isMediumScreen ? "90%" : "80%",
-                  height: isSmallScreen ? 250 : isMediumScreen ? 300 : 350,
-                  m: 1,
-                }}
-              >
-                <Typography
-                  variant={isSmallScreen ? "body2" : "h6"}
-                  sx={{ mb: 2, color: "text.primary", fontWeight: 600, p: isSmallScreen ? 1 : 2 }}
-                >
-                  Platform Engagement
-                </Typography>
-                <ResponsiveContainer width="100%" height="80%">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+    >
+      <Box sx={{ p: 3, bgcolor: "background.default" }}>
+        <Box sx={{ display: "flex", alignItems: "center", mb: 3 }}>
+          <Dashboard sx={{ mr: 1, color: "primary.main" }} />
+          <Typography variant="h4" color="text.primary">
+            Admin Dashboard
+          </Typography>
+        </Box>
+
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={6}>
+            <Card sx={{ bgcolor: "background.paper" }}>
+              <CardContent>
+                <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
+                  <BarChartIcon sx={{ mr: 1, color: "secondary.main" }} />
+                  <Typography variant="h6" color="text.primary">
+                    Platform Statistics
+                  </Typography>
+                </Box>
+                <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
-                    <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={isSmallScreen ? 60 : 100} label>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={isSmallScreen ? 80 : 100}
+                      fill="#8884d8"
+                      dataKey="value"
+                      label
+                    >
                       {pieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
@@ -160,142 +356,91 @@ const AdminDashboard = () => {
                     <Legend />
                   </PieChart>
                 </ResponsiveContainer>
-              </Box>
+              </CardContent>
+            </Card>
+          </Grid>
 
-              {/* Bar Chart: Activity Breakdown */}
-              <Box
-                sx={{
-                  bgcolor: "background.paper",
-                  borderRadius: "16px",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
-                  width: "100%",
-                  p: isSmallScreen ? 1.5 : 2,
-                  boxSizing: "border-box",
-                  maxWidth: isSmallScreen ? "100%" : isMediumScreen ? "90%" : "80%",
-                  height: isSmallScreen ? 250 : isMediumScreen ? 300 : 350,
-                  m: 1,
-                }}
-              >
-                <Typography
-                  variant={isSmallScreen ? "body2" : "h6"}
-                  sx={{ mb: 2, color: "text.primary", fontWeight: 600, p: isSmallScreen ? 1 : 2 }}
-                >
-                  Activity Breakdown
-                </Typography>
-                <ResponsiveContainer width="100%" height="80%">
-                  <BarChart data={barData}>
-                    <XAxis dataKey="month" stroke="text.primary" />
-                    <YAxis stroke="text.primary" />
-                    <Tooltip />
-                    <Bar dataKey="likes" fill={COLORS[0]} />
-                    <Bar dataKey="posts" fill={COLORS[1]} />
-                    <Bar dataKey="comments" fill={COLORS[2]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </Box>
-
-              {/* Line Chart: Activity Trend */}
-              <Box
-                sx={{
-                  bgcolor: "background.paper",
-                  borderRadius: "16px",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
-                  width: "100%",
-                  p: isSmallScreen ? 1.5 : 2,
-                  boxSizing: "border-box",
-                  maxWidth: isSmallScreen ? "100%" : isMediumScreen ? "90%" : "80%",
-                  height: isSmallScreen ? 250 : isMediumScreen ? 300 : 350,
-                  m: 1,
-                }}
-              >
-                <Typography
-                  variant={isSmallScreen ? "body2" : "h6"}
-                  sx={{ mb: 2, color: "text.primary", fontWeight: 600, p: isSmallScreen ? 1 : 2 }}
-                >
-                  Activity Trend
-                </Typography>
-                <ResponsiveContainer width="100%" height="80%">
-                  <LineChart data={lineData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="month" stroke="text.primary" />
-                    <YAxis stroke="text.primary" />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="likes" stroke={COLORS[0]} activeDot={{ r: 8 }} />
-                    <Line type="monotone" dataKey="posts" stroke={COLORS[1]} activeDot={{ r: 8 }} />
-                    <Line type="monotone" dataKey="comments" stroke={COLORS[2]} activeDot={{ r: 8 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </Box>
-
-              {/* Scatter Plot: User Engagement */}
-              <Box
-                sx={{
-                  bgcolor: "background.paper",
-                  borderRadius: "16px",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
-                  width: "100%",
-                  p: isSmallScreen ? 1.5 : 2,
-                  boxSizing: "border-box",
-                  maxWidth: isSmallScreen ? "100%" : isMediumScreen ? "90%" : "80%",
-                  height: isSmallScreen ? 250 : isMediumScreen ? 300 : 350,
-                  m: 1,
-                }}
-              >
-                <Typography
-                  variant={isSmallScreen ? "body2" : "h6"}
-                  sx={{ mb: 2, color: "text.primary", fontWeight: 600, p: isSmallScreen ? 1 : 2 }}
-                >
-                  User Engagement (Posts vs. Likes)
-                </Typography>
-                <ResponsiveContainer width="100%" height="80%">
-                  <ScatterChart>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="posts" name="Posts" stroke="text.primary" />
-                    <YAxis dataKey="likes" name="Likes" stroke="text.primary" />
-                    <Tooltip cursor={{ strokeDasharray: "3 3" }} />
-                    <Scatter name="Users" data={scatterData} fill={COLORS[0]} />
-                  </ScatterChart>
-                </ResponsiveContainer>
-              </Box>
-
-              {/* Heatmap: Activity Heatmap */}
-              <Box
-                sx={{
-                  bgcolor: "background.paper",
-                  borderRadius: "16px",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
-                  width: "100%",
-                  p: isSmallScreen ? 1.5 : 2,
-                  boxSizing: "border-box",
-                  maxWidth: isSmallScreen ? "100%" : isMediumScreen ? "90%" : "80%",
-                  height: isSmallScreen ? 250 : isMediumScreen ? 300 : 350,
-                  m: 1,
-                }}
-              >
-                <Typography
-                  variant={isSmallScreen ? "body2" : "h6"}
-                  sx={{ mb: 2, color: "text.primary", fontWeight: 600, p: isSmallScreen ? 1 : 2 }}
-                >
-                  Activity Heatmap (Day vs. Hour)
-                </Typography>
-                <Box sx={{ width: "100%", height: "80%" }}>
-                  <ReactHeatmap
-                    xLabels={Array.from({ length: 24 }, (_, i) => i.toString())}
-                    yLabels={["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]}
-                    data={heatmapData}
-                    cellStyle={(value) => ({
-                      background: value > 80 ? COLORS[0] : value > 60 ? COLORS[1] : value > 40 ? "#ffeb3b" : "#e0f7fa",
-                      fontSize: isSmallScreen ? "0.6rem" : "0.8rem",
-                      border: "1px solid #ccc",
-                    })}
-                    cellRender={(value) => value && <div>{value}</div>}
-                    onClick={(x, y) => alert(`Clicked ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][y]} ${x}`)}
-                  />
+          <Grid item xs={12} md={6}>
+            <Card sx={{ bgcolor: "background.paper" }}>
+              <CardContent>
+                <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
+                  <TrendingUp sx={{ mr: 1, color: "secondary.main" }} />
+                  <Typography variant="h6" color="text.primary">
+                    Monthly Activity
+                  </Typography>
                 </Box>
-              </Box>
-            </>
-          )}
-        </Box>
+                <BarResponsiveContainer width="100%" height={300}>
+                  <BarChart data={barData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="month" />
+                    <YAxis />
+                    <RechartsTooltip />
+                    <RechartsLegend />
+                    <Bar dataKey="posts" fill="#8515fe" name="Posts" />
+                    <Bar dataKey="likes" fill="#8b5cf6" name="Likes" />
+                    <Bar dataKey="comments" fill="#f44336" name="Comments" />
+                  </BarChart>
+                </BarResponsiveContainer>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12}>
+            <Card sx={{ bgcolor: "background.paper" }}>
+              <CardContent>
+                <Typography variant="h6" color="text.primary" gutterBottom>
+                  Recent Posts
+                </Typography>
+                <Grid container spacing={2}>
+                  {analytics.recentPosts?.map((post) => (
+                    <Grid item xs={12} sm={6} md={4} key={post._id}>
+                      <Card sx={{ position: "relative" }}>
+                        <CardContent>
+                          <Typography variant="subtitle1">{post.content || post.text}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            By {post.postedBy?.username || "Unknown"} on{" "}
+                            {new Date(post.createdAt).toLocaleDateString()}
+                          </Typography>
+                          <IconButton
+                            sx={{ position: "absolute", top: 8, right: 8 }}
+                            onClick={(e) => handleMenuOpen(e, post)}
+                          >
+                            <MoreVert />
+                          </IconButton>
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  ))}
+                </Grid>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+
+        <Menu
+          anchorEl={anchorEl}
+          open={Boolean(anchorEl)}
+          onClose={handleMenuClose}
+        >
+          <MenuItem
+            onClick={() => {
+              handleToggleBanPost(selectedPost._id, selectedPost.isBanned);
+              handleMenuClose();
+            }}
+          >
+            <Gavel sx={{ mr: 1 }} />
+            {selectedPost?.isBanned ? "Unban Post" : "Ban Post"}
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              handleToggleBanUser(selectedPost.postedBy._id, selectedPost.postedBy.isBanned);
+              handleMenuClose();
+            }}
+          >
+            <Gavel sx={{ mr: 1 }} />
+            {selectedPost?.postedBy?.isBanned ? "Unban User" : "Ban User"}
+          </MenuItem>
+        </Menu>
       </Box>
     </motion.div>
   );

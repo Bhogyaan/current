@@ -14,8 +14,10 @@ import CssBaseline from "@mui/material/CssBaseline";
 // AntD
 import { ConfigProvider } from "antd";
 
-// Notistack (Snackbar)
-import { SnackbarProvider } from "notistack";
+// react-toastify
+import { ToastContainer, toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+import { FaCheckCircle, FaInfoCircle, FaExclamationTriangle, FaTimesCircle } from "react-icons/fa";
 
 // Custom MUI theme
 const muiTheme = createTheme({
@@ -46,6 +48,34 @@ const antThemeConfig = {
   },
 };
 
+// Custom toast configuration
+const toastConfig = {
+  position: "top-center",
+  autoClose: 3000,
+  hideProgressBar: false,
+  closeOnClick: true,
+  pauseOnHover: true,
+  draggable: true,
+  progress: undefined,
+  theme: "dark",
+};
+
+// Custom toast icons
+const toastIcons = {
+  success: <FaCheckCircle />,
+  info: <FaInfoCircle />,
+  warning: <FaExclamationTriangle />,
+  error: <FaTimesCircle />,
+};
+
+// Custom toast function
+const showToast = (type, message) => {
+  toast[type](message, {
+    ...toastConfig,
+    icon: toastIcons[type],
+  });
+};
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <RecoilRoot>
@@ -53,14 +83,30 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <ConfigProvider theme={antThemeConfig}>
           <ThemeProvider theme={muiTheme}>
             <CssBaseline />
-            <SnackbarProvider maxSnack={3} autoHideDuration={3000}>
-              <SocketContextProvider>
-                <App />
-              </SocketContextProvider>
-            </SnackbarProvider>
+            <ToastContainer
+              position="top-center"
+              autoClose={3000}
+              hideProgressBar={false}
+              newestOnTop={false}
+              closeOnClick
+              rtl={false}
+              pauseOnFocusLoss
+              draggable
+              pauseOnHover
+              theme="dark"
+              style={{
+                fontFamily: muiTheme.typography.fontFamily,
+              }}
+            />
+            <SocketContextProvider>
+              <App />
+            </SocketContextProvider>
           </ThemeProvider>
         </ConfigProvider>
       </BrowserRouter>
     </RecoilRoot>
   </React.StrictMode>
 );
+
+// Example usage of showToast function
+export { showToast };

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useContext } from "react";
 import { useRecoilValue, useRecoilState } from "recoil";
 import userAtom from "../atoms/userAtom";
 import postsAtom from "../atoms/postsAtom";
@@ -9,9 +9,9 @@ import {
   IconButton,
   Typography,
 } from "@mui/material";
+import ThumbUpIcon from '@mui/icons-material/ThumbUp';
+import ThumbUpOffAltIcon from '@mui/icons-material/ThumbUpOffAlt';
 import {
-  Favorite as FavoriteIcon,
-  FavoriteBorder as FavoriteBorderIcon,
   Comment as CommentIcon,
   Bookmark,
   BookmarkBorder,
@@ -19,6 +19,8 @@ import {
 } from "@mui/icons-material";
 import { Flex as AntdFlex } from "antd";
 import { motion } from "framer-motion";
+import { SocketContext } from "../context/SocketContext";
+import Confetti from 'react-confetti';
 
 const Actions = ({ post, onCommentClick }) => {
   const user = useRecoilValue(userAtom);
@@ -26,8 +28,10 @@ const Actions = ({ post, onCommentClick }) => {
   const [liked, setLiked] = useState(post.likes?.includes(user?._id) || false);
   const [bookmarked, setBookmarked] = useState(post.bookmarks?.includes(user?._id) || false);
   const [isLiking, setIsLiking] = useState(false);
+  const [showConfetti, setShowConfetti] = useState(false);
   const showToast = useShowToast();
   const { handleBookmark, isBookmarking } = useBookmark();
+  const { socket } = useContext(SocketContext);
 
   const handleLikeAndUnlike = useCallback(async () => {
     if (!user) {
@@ -65,12 +69,22 @@ const Actions = ({ post, onCommentClick }) => {
         ),
       }));
       setLiked((prev) => !prev);
+      setShowConfetti(true);
+      setTimeout(() => setShowConfetti(false), 2000);
+      // Emit real-time like/unlike event
+      if (socket) {
+        socket.emit("likeUnlikePost", {
+          postId: post._id,
+          userId: user._id,
+          likes: data.likes,
+        });
+      }
     } catch (error) {
       showToast("Error", error.message, "error");
     } finally {
       setIsLiking(false);
     }
-  }, [user, isLiking, post._id, showToast, setPostsState]);
+  }, [user, isLiking, post._id, showToast, setPostsState, socket]);
 
   const onBookmarkClick = useCallback(async () => {
     if (!user) {
@@ -151,6 +165,7 @@ const Actions = ({ post, onCommentClick }) => {
         width: "100%",
         maxWidth: { xs: "100%", sm: "90%", md: "600px" },
         mx: "auto",
+        position: "relative",
       }}
     >
       <AntdFlex
@@ -158,20 +173,47 @@ const Actions = ({ post, onCommentClick }) => {
         justify="center"
         sx={{ my: { xs: 0.5, sm: 1, md: 1.5 } }}
       >
-        <IconButton
-          component={motion.button}
-          whileHover={{ scale: 1.1 }}
-          whileTap={{ scale: 0.9 }}
-          onClick={handleLikeAndUnlike}
-          disabled={isLiking}
-          sx={{ color: liked ? "#ED4956" : "text.secondary", p: { xs: 0.5, sm: 1 } }}
-        >
-          {liked ? (
-            <FavoriteIcon sx={{ fontSize: { xs: 20, sm: 24, md: 28 } }} />
-          ) : (
-            <FavoriteBorderIcon sx={{ fontSize: { xs: 20, sm: 24, md: 28 } }} />
+        <Box sx={{ position: 'relative' }}>
+          <IconButton
+            component={motion.button}
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={handleLikeAndUnlike}
+            disabled={isLiking}
+            sx={{ color: liked ? "#ED4956" : "text.secondary", p: { xs: 0.5, sm: 1 } }}
+          >
+            {liked ? (
+              <motion.div
+                initial={{ scale: 0.8 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 10 }}
+              >
+                <ThumbUpIcon sx={{ fontSize: { xs: 20, sm: 24, md: 28 } }} />
+              </motion.div>
+            ) : (
+              <ThumbUpOffAltIcon sx={{ fontSize: { xs: 20, sm: 24, md: 28 } }} />
+            )}
+          </IconButton>
+          {showConfetti && (
+            <Box
+              sx={{
+                position: "absolute",
+                top: -50,
+                left: -50,
+                width: "100px",
+                height: "100px",
+                pointerEvents: "none",
+              }}
+            >
+              <Confetti
+                width={100}
+                height={100}
+                recycle={false}
+                numberOfPieces={200}
+              />
+            </Box>
           )}
-        </IconButton>
+        </Box>
         <IconButton
           component={motion.button}
           whileHover={{ scale: 1.1 }}
@@ -246,6 +288,12 @@ const Actions = ({ post, onCommentClick }) => {
 };
 
 export default Actions;
+
+
+
+
+
+
 
 
 // // components/Actions.jsx

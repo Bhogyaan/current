@@ -2,17 +2,12 @@ import mongoose from "mongoose";
 
 const messageSchema = new mongoose.Schema(
   {
-    conversationId: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation" },
-    sender: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    text: String,
-    seen: {
-      type: Boolean,
-      default: false,
-    },
-    img: {
-      type: String,
-      default: "",
-    },
+    conversationId: { type: mongoose.Schema.Types.ObjectId, ref: "Conversation", required: true },
+    sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    recipient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    text: { type: String, default: "" },
+    seen: { type: Boolean, default: false },
+    img: { type: String, default: "" },
     status: {
       type: String,
       enum: ["sent", "received", "delivered", "seen"],

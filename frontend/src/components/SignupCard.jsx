@@ -22,7 +22,6 @@ import { useNavigate } from 'react-router-dom';
 export default function SignupCard() {
   const [showPassword, setShowPassword] = useState(false);
   const setAuthScreen = useSetRecoilState(authScreenAtom);
-  const setUser = useSetRecoilState(userAtom);
   const showToast = useShowToast();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -59,10 +58,15 @@ export default function SignupCard() {
         return;
       }
 
-      localStorage.setItem('user-threads', JSON.stringify(data));
-      setUser(data);
-      showToast('Success', 'Signed up successfully', 'success');
-      navigate('/dashboard');
+      // Clear any existing authentication state
+      localStorage.removeItem('user-NRBLOG');
+      console.log('Signup successful, redirecting to login'); // Debug log
+      showToast('Success', 'Signed up successfully. Please log in.', 'success');
+      // Delay navigation to ensure toast visibility and state update
+      setTimeout(() => {
+        setAuthScreen('login');
+        navigate('/auth', { replace: true }); // Use replace to avoid back navigation
+      }, 500);
     } catch (error) {
       showToast('Error', error.message || 'Something went wrong', 'error');
     } finally {

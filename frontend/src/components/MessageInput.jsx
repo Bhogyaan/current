@@ -1,5 +1,5 @@
-import React, { useRef, useState, useEffect } from "react";
-import { Box, IconButton, InputAdornment, TextField, CircularProgress } from "@mui/material";
+import { useRef, useState, useEffect } from "react";
+import { Box, IconButton, InputAdornment, TextField, CircularProgress, Typography } from "@mui/material";
 import { IoSendSharp } from "react-icons/io5";
 import { BsFillImageFill } from "react-icons/bs";
 import { Description as DescriptionIcon, Close as CloseIcon } from "@mui/icons-material";
@@ -12,6 +12,7 @@ import { useSocket } from "../context/SocketContext";
 
 const MessageInput = () => {
   const [messageText, setMessageText] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
   const showToast = useShowToast();
   const selectedConversation = useRecoilValue(selectedConversationAtom);
   const setConversations = useSetRecoilState(conversationsAtom);
@@ -21,31 +22,41 @@ const MessageInput = () => {
   const { handleImageChange, mediaUrl, setMediaUrl, mediaType, setMediaType } = usePreviewImg();
   const [isSending, setIsSending] = useState(false);
   const { socket } = useSocket();
+  const typingTimeoutRef = useRef(null);
 
   useEffect(() => {
-    if (!socket || !selectedConversation._id) return;
+    if (!socket || !selectedConversation._id || selectedConversation.mock) return;
 
-    let typingTimeout;
     const emitTyping = () => {
-      socket.emit("typing", { conversationId: selectedConversation._id });
-    };
-    const emitStopTyping = () => {
-      socket.emit("stopTyping", { conversationId: selectedConversation._id });
+      if (!isTyping) {
+        socket.emit("typing", { conversationId: selectedConversation._id, userId: selectedConversation.userId });
+        setIsTyping(true);
+      }
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        socket.emit("stopTyping", { conversationId: selectedConversation._id, userId: selectedConversation.userId });
+        setIsTyping(false);
+      }, 2000);
     };
 
-    if (messageText) {
+    if (messageText.trim() || mediaUrl) {
       emitTyping();
-      typingTimeout = setTimeout(emitStopTyping, 2000);
-    } else {
-      emitStopTyping();
+    } else if (isTyping) {
+      socket.emit("stopTyping", { conversationId: selectedConversation._id, userId: selectedConversation.userId });
+      setIsTyping(false);
     }
 
-    return () => clearTimeout(typingTimeout);
-  }, [messageText, selectedConversation._id, socket]);
+    return () => {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      if (isTyping) {
+        socket.emit("stopTyping", { conversationId: selectedConversation._id, userId: selectedConversation.userId });
+      }
+    };
+  }, [messageText, mediaUrl, selectedConversation._id, selectedConversation.mock, selectedConversation.userId, socket, isTyping]);
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!messageText && !mediaUrl) return;
+    if (!messageText.trim() && !mediaUrl) return;
     if (isSending) return;
     if (!selectedConversation.userId) {
       showToast("Error", "No recipient selected", "error");
@@ -58,19 +69,23 @@ const MessageInput = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: messageText,
+          message: messageText.trim(),
           recipientId: selectedConversation.userId,
           img: mediaUrl,
         }),
         credentials: "include",
       });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Failed to send message: ${res.status} ${errorText}`);
+      }
+
       const data = await res.json();
       if (data.error) {
         showToast("Error", data.error, "error");
         return;
       }
-
-      console.log("Message sent:", data);
 
       if (selectedConversation.mock) {
         setConversations((prevConvs) =>
@@ -80,7 +95,11 @@ const MessageInput = () => {
                   ...conv,
                   _id: data.conversationId,
                   mock: false,
-                  lastMessage: { text: messageText || "Media", sender: data.sender },
+                  lastMessage: {
+                    text: messageText.trim() || "Media",
+                    sender: { _id: data.sender._id },
+                    seen: false,
+                  },
                 }
               : conv
           )
@@ -96,7 +115,11 @@ const MessageInput = () => {
             conv._id === selectedConversation._id
               ? {
                   ...conv,
-                  lastMessage: { text: messageText || "Media", sender: data.sender },
+                  lastMessage: {
+                    text: messageText.trim() || "Media",
+                    sender: { _id: data.sender._id },
+                    seen: false,
+                  },
                 }
               : conv
           )
@@ -131,9 +154,9 @@ const MessageInput = () => {
             alt="Preview"
             sx={{
               maxWidth: "100%",
-              maxHeight: { xs: "80px", sm: "120px", md: "150px" },
-              borderRadius: "8px",
-              boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+              maxHeight: { xs: "80px", sm: "120px" },
+              borderRadius: 20,
+              boxShadow: "0 2px 4px rgba(0, 0, 0, 0.5)",
             }}
           />
         );
@@ -145,9 +168,9 @@ const MessageInput = () => {
             controls
             sx={{
               maxWidth: "100%",
-              maxHeight: { xs: "80px", sm: "120px", md: "150px" },
-              borderRadius: "8px",
-              boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+              maxHeight: { xs: "80px", sm: "120px" },
+              borderRadius: 20,
+              boxShadow: "0 2px 4px rgba(0, 0, 0, 0.5)",
             }}
           />
         );
@@ -159,17 +182,13 @@ const MessageInput = () => {
             controls
             sx={{
               width: "100%",
-              "& audio": {
-                width: "100%",
-                borderRadius: "8px",
-                bgcolor: "rgba(255, 255, 255, 0.1)",
-              },
+              "& audio": { width: "100%", borderRadius: 20, bgcolor: "#2e2e2e" },
             }}
           />
         );
       case "document":
         return (
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="#8515fe">
             Document: {imageRef.current?.files[0]?.name || docRef.current?.files[0]?.name}
           </Typography>
         );
@@ -183,24 +202,23 @@ const MessageInput = () => {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.5 }}
-      style={{ flexShrink: 0, padding: { xs: "8px", sm: "12px" } }}
+      style={{ flexShrink: 0, padding: 8 }}
     >
       {mediaUrl && (
         <Box
           sx={{
             mb: 1,
             p: 1,
-            bgcolor: "rgba(255, 255, 255, 0.05)",
-            borderRadius: "8px",
-            border: "1px solid rgba(255, 255, 255, 0.2)",
-            backdropFilter: "blur(10px)",
+            bgcolor: "#2e2e2e",
+            borderRadius: 20,
+            border: "1px solid #444444",
             display: "flex",
             alignItems: "center",
             gap: 1,
           }}
         >
           {renderMediaPreview()}
-          <IconButton onClick={handleCancelMedia} sx={{ color: "white" }}>
+          <IconButton onClick={handleCancelMedia} sx={{ color: "#8515fe" }}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -210,22 +228,24 @@ const MessageInput = () => {
           display: "flex",
           alignItems: "center",
           gap: 1,
-          bgcolor: "rgba(255, 255, 255, 0.05)",
-          borderRadius: "12px",
+          bgcolor: "#2e2e2e",
+          borderRadius: 20,
           p: 1,
-          border: "1px solid rgba(255, 255, 255, 0.2)",
-          backdropFilter: "blur(10px)",
+          border: "1px solid #444444",
+          boxShadow: "0 2px 4px rgba(0, 0, 0, 0.5)",
         }}
       >
         <IconButton
           onClick={() => imageRef.current.click()}
-          sx={{ color: "white", p: 0.5 }}
+          sx={{ color: "#8515fe", p: 0.5 }}
+          aria-label="Upload media"
         >
           <BsFillImageFill size={20} />
         </IconButton>
         <IconButton
           onClick={() => docRef.current.click()}
-          sx={{ color: "white", p: 0.5 }}
+          sx={{ color: "#8515fe", p: 0.5 }}
+          aria-label="Upload document"
         >
           <DescriptionIcon fontSize="small" />
         </IconButton>
@@ -238,21 +258,22 @@ const MessageInput = () => {
             onChange={(e) => setMessageText(e.target.value)}
             disabled={isSending}
             sx={{
-              bgcolor: "rgba(255, 255, 255, 0.1)",
-              borderRadius: "8px",
+              bgcolor: "#3a3a3a",
+              borderRadius: 20,
               "& fieldset": { border: "none" },
-              "& input": { color: "white", fontSize: { xs: "0.875rem", sm: "1rem" } },
+              "& input": { color: "#b0b0b0", fontSize: { xs: "0.875rem", sm: "1rem" } },
             }}
             InputProps={{
               endAdornment: (
                 <InputAdornment position="end">
                   <IconButton
                     onClick={handleSendMessage}
-                    disabled={isSending || (!messageText && !mediaUrl)}
-                    sx={{ color: "#9b59b6", p: 0.5 }}
+                    disabled={isSending || (!messageText.trim() && !mediaUrl)}
+                    sx={{ color: "#8515fe", p: 0.5 }}
+                    aria-label="Send message"
                   >
                     {isSending ? (
-                      <CircularProgress size={20} sx={{ color: "#9b59b6" }} />
+                      <CircularProgress size={20} sx={{ color: "#8515fe" }} />
                     ) : (
                       <IoSendSharp size={20} />
                     )}

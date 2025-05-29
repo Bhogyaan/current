@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useContext } from "react";
 import {
   Avatar,
   Box,
@@ -17,13 +17,13 @@ import {
   Edit,
   Delete,
   Download,
-  Favorite,
-  FavoriteBorder,
-  Reply,
   Verified as VerifiedIcon,
+  Share,
+  Block,
+  CheckCircle,
 } from "@mui/icons-material";
 import { formatDistanceToNow } from "date-fns";
-import useShowToast from "../hooks/useShowToast";
+import { message } from "antd";
 import { useRecoilState, useRecoilValue } from "recoil";
 import userAtom from "../atoms/userAtom";
 import postsAtom from "../atoms/postsAtom";
@@ -37,68 +37,173 @@ import {
   BsFilePptFill,
   BsFileTextFill,
 } from "react-icons/bs";
+import CommentItem from "./CommentItem";
+import { SocketContext } from "../context/SocketContext";
+import { debounce } from "lodash";
+import { ThumbUp, Comment, Bookmark } from "@mui/icons-material";
 
-const Post = ({ post, postedBy, isAdminView = false, onBanUnbanPost }) => {
+const Post = ({ post, postedBy }) => {
   const [user, setUser] = useState(null);
-  const [allPostsUsers, setAllPostsUsers] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [anchorEl, setAnchorEl] = useState(null);
   const [commentModalOpen, setCommentModalOpen] = useState(false);
   const [newComment, setNewComment] = useState("");
-  const [replyTo, setReplyTo] = useState(null);
-  const [editingCommentId, setEditingCommentId] = useState(null);
-  const [editedText, setEditedText] = useState("");
-  const showToast = useShowToast();
-  const currentUser = useRecoilValue(userAtom);
   const [posts, setPosts] = useRecoilState(postsAtom);
+  const currentUser = useRecoilValue(userAtom);
   const navigate = useNavigate();
+  const { socket } = useContext(SocketContext);
+
+  const fetchComments = useCallback(async () => {
+    if (!post?._id) {
+      message.error("Invalid post ID");
+      return;
+    }
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        message.error("No authentication token found");
+        return;
+      }
+      const res = await fetch(`/api/posts/${post._id}/comments?page=1&limit=10`, {
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.error) {
+        console.error("Fetch comments error:", data.error);
+        message.error(data.error);
+        return;
+      }
+
+      setPosts((prev) => ({
+        ...prev,
+        posts: prev.posts.map((p) =>
+          p._id === post._id ? { ...p, comments: data.comments } : p
+        ),
+      }));
+    } catch (error) {
+      console.error("Fetch comments exception:", error);
+      message.error("Failed to fetch comments");
+    }
+  }, [post?._id, setPosts]);
+
+  const debouncedUpdateComments = debounce((postId, updatedComments) => {
+    setPosts((prev) => ({
+      ...prev,
+      posts: prev.posts.map((p) =>
+        p._id === postId ? { ...p, comments: updatedComments } : p
+      ),
+    }));
+  }, 300);
+
+  useEffect(() => {
+    if (socket && post?._id) {
+      socket.emit("joinPost", post._id);
+
+      socket.on("newComment", ({ postId, comment, post: updatedPost }) => {
+        if (postId === post._id && updatedPost) {
+          debouncedUpdateComments(postId, updatedPost.comments);
+          fetchComments();
+        }
+      });
+
+      socket.on("likeUnlikeComment", ({ postId, commentId, userId, likes, post: updatedPost }) => {
+        if (postId === post._id && updatedPost) {
+          debouncedUpdateComments(postId, updatedPost.comments);
+          fetchComments();
+        }
+      });
+
+      socket.on("editComment", ({ postId, commentId, text, post: updatedPost }) => {
+        if (postId === post._id && updatedPost) {
+          debouncedUpdateComments(postId, updatedPost.comments);
+          fetchComments();
+        }
+      });
+
+      socket.on("deleteComment", ({ postId, commentId, post: updatedPost }) => {
+        if (postId === post._id && updatedPost) {
+          debouncedUpdateComments(postId, updatedPost.comments);
+          fetchComments();
+        }
+      });
+
+      socket.on("postDeleted", ({ postId }) => {
+        if (postId === post._id) {
+          message.info("Post has been deleted");
+          setPosts((prev) => ({
+            ...prev,
+            posts: prev.posts.filter((p) => p._id !== postId),
+          }));
+        }
+      });
+
+      socket.on("postBanned", ({ postId, post: updatedPost }) => {
+        if (postId === post._id) {
+          setPosts((prev) => ({
+            ...prev,
+            posts: prev.posts.map((p) =>
+              p._id === postId ? { ...p, isBanned: true } : p
+            ),
+          }));
+        }
+      });
+
+      socket.on("postUnbanned", ({ postId, post: updatedPost }) => {
+        if (postId === post._id) {
+          setPosts((prev) => ({
+            ...prev,
+            posts: prev.posts.map((p) =>
+              p._id === postId ? { ...p, isBanned: false } : p
+            ),
+          }));
+        }
+      });
+
+      return () => {
+        socket.emit("leavePost", post._id);
+        socket.off("newComment");
+        socket.off("likeUnlikeComment");
+        socket.off("editComment");
+        socket.off("deleteComment");
+        socket.off("postDeleted");
+        socket.off("postBanned");
+        socket.off("postUnbanned");
+      };
+    }
+  }, [socket, post?._id, setPosts, fetchComments]);
 
   const fetchUserData = useCallback(async () => {
     try {
       setIsLoading(true);
-      if (isAdminView && currentUser?.isAdmin) {
-        const res = await fetch("/api/users/all", {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-        });
-        const data = await res.json();
-        if (data.error) {
-          showToast("Error", data.error, "error");
-          setAllPostsUsers({});
-          return;
-        }
-        // Ensure _id is used as the key for consistency with postedBy
-        const usersMap = data.reduce((acc, user) => {
-          acc[user._id] = { ...user, username: user.username || "Unknown User", profilePic: user.profilePic || "/default-avatar.png", name: user.name || "Unknown" };
-          return acc;
-        }, {});
-        setAllPostsUsers(usersMap);
-        console.log("Fetched users:", usersMap); // Debug log
-      } else {
-        const query = typeof postedBy === "string" ? postedBy : postedBy?._id || postedBy?.username;
-        if (!query) {
-          showToast("Error", "Invalid user data for post", "error");
-          return;
-        }
-        const res = await fetch(`/api/users/profile/${query}`, {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-        });
-        const data = await res.json();
-        if (data.error) {
-          showToast("Error", "User not found", "error");
-          return;
-        }
-        setUser({ ...data, username: data.username || "Unknown User", profilePic: data.profilePic || "/default-avatar.png", name: data.name || "Unknown" });
+      const queryParam = typeof postedBy === "string" ? postedBy : postedBy?._id || postedBy?.username;
+      if (!queryParam) {
+        message.error("Invalid user data for post");
+        return;
       }
+      const res = await fetch(`/api/users/profile/${queryParam}`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+      });
+      const data = await res.json();
+      if (data.error) {
+        message.error("User not found");
+        return;
+      }
+      setUser({
+        ...data,
+        username: data.username || "Unknown User",
+        profilePic: data.profilePic || "/default-avatar.png",
+        name: data.name || "Unknown",
+      });
     } catch (error) {
-      showToast("Error", error.message, "error");
-      setAllPostsUsers({});
+      console.error(error);
+      message.error(error.message || "Failed to fetch user data");
       setUser(null);
     } finally {
       setIsLoading(false);
     }
-  }, [postedBy, showToast, isAdminView, currentUser?.isAdmin]);
+  }, [postedBy]);
 
   useEffect(() => {
     fetchUserData();
@@ -114,325 +219,212 @@ const Post = ({ post, postedBy, isAdminView = false, onBanUnbanPost }) => {
       });
       const data = await res.json();
       if (data.error) {
-        showToast("Error", data.error, "error");
+        message.error(data.error);
         return;
       }
-      showToast("Success", "Post deleted", "success");
+      message.success("Post deleted");
       setPosts((prev) => ({
         ...prev,
-        posts: (prev.posts || []).filter((p) => p._id !== post._id),
-        bookmarks: (prev.bookmarks || []).filter((p) => p._id !== post._id),
-        suggestedPosts: (prev.suggestedPosts || []).filter((p) => p._id !== post._id),
+        posts: prev.posts.filter((p) => p._id !== post._id),
       }));
     } catch (error) {
-      showToast("Error", error.message, "error");
+      message.error(error.message || "Failed to delete post");
     }
   };
 
-  const handleEditPost = () => navigate(`/edit-post/${post._id}`);
+  const handleEditPost = () => {
+    navigate(`/edit-post/${post._id}`);
+  };
+
   const handleDownloadPost = () => {
-    const content = post.media || post.text;
-    const blob = new Blob([content], { type: post.media ? "application/octet-stream" : "text/plain" });
+    const content = post.content || post.text;
+    const mediaType = post?.mediaType || "text/plain";
+    const blob = new Blob([content], { type: mediaType });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = post.originalFilename || `post_${post._id}.${post.mediaType || "txt"}`;
+    link.download = post.originalFilename || `post_${post._id}.${mediaType.split('/')[1] || "txt"}`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
-  const handleMoreClick = (event) => setAnchorEl(event.currentTarget);
-  const handleMoreClose = () => setAnchorEl(null);
+  const handleBanPost = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`/api/posts/${post._id}/ban`, {
+        method: "PUT",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}` 
+        },
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.error) {
+        message.error(data.error);
+        return;
+      }
+      message.success("Post banned successfully");
+      setPosts((prev) => ({
+        ...prev,
+        posts: prev.posts.map((p) =>
+          p._id === post._id ? { ...p, isBanned: true } : p
+        ),
+      }));
+    } catch (error) {
+      message.error(error.message || "Failed to ban post");
+    }
+  };
+
+  const handleUnbanPost = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`/api/posts/${post._id}/unban`, {
+        method: "PUT",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}` 
+        },
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.error) {
+        message.error(data.error);
+        return;
+      }
+      message.success("Post unbanned successfully");
+      setPosts((prev) => ({
+        ...prev,
+        posts: prev.posts.map((p) =>
+          p._id === post._id ? { ...p, isBanned: false } : p
+        ),
+      }));
+    } catch (error) {
+      message.error(error.message || "Failed to unban post");
+    }
+  };
+
+  const handleMoreClick = (event) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleMoreClose = () => {
+    setAnchorEl(null);
+  };
 
   const handleAddComment = async () => {
-    if (!newComment.trim()) return showToast("Error", "Comment cannot be empty", "error");
-    if (replyTo && !replyTo._id) {
-      showToast("Error", "Invalid reply target", "error");
-      setReplyTo(null);
+    if (!newComment.trim()) {
+      message.error("Comment cannot be empty");
       return;
     }
     try {
-      const endpoint = replyTo
-        ? `/api/posts/post/${post._id}/comment/${replyTo._id}/reply`
-        : `/api/posts/post/${post._id}/comment`;
-      const res = await fetch(endpoint, {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`/api/posts/${post._id}/comment`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token")}` },
-        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ text: newComment }),
-      });
-      const data = await res.json();
-      if (data.error) return showToast("Error", data.error, "error");
-
-      setPosts((prev) => ({
-        ...prev,
-        posts: (prev.posts || []).map((p) =>
-          p._id === post._id
-            ? {
-                ...p,
-                comments: replyTo
-                  ? p.comments.map((c) =>
-                      c._id === replyTo._id
-                        ? { ...c, replies: [...(c.replies || []), data] }
-                        : c
-                    )
-                  : [...(p.comments || []), data],
-              }
-            : p
-        ),
-        bookmarks: (prev.bookmarks || []).map((p) =>
-          p._id === post._id
-            ? {
-                ...p,
-                comments: replyTo
-                  ? p.comments.map((c) =>
-                      c._id === replyTo._id
-                        ? { ...c, replies: [...(c.replies || []), data] }
-                        : c
-                    )
-                  : [...(p.comments || []), data],
-              }
-            : p
-        ),
-        suggestedPosts: (prev.suggestedPosts || []).map((p) =>
-          p._id === post._id
-            ? {
-                ...p,
-                comments: replyTo
-                  ? p.comments.map((c) =>
-                      c._id === replyTo._id
-                        ? { ...c, replies: [...(c.replies || []), data] }
-                        : c
-                    )
-                  : [...(p.comments || []), data],
-              }
-            : p
-        ),
-      }));
-      setNewComment("");
-      setReplyTo(null);
-      showToast("Success", replyTo ? "Reply added" : "Comment added", "success");
-    } catch (error) {
-      showToast("Error", error.message, "error");
-    }
-  };
-
-  const handleEditComment = async (commentId) => {
-    if (!editedText.trim()) return showToast("Error", "Comment text cannot be empty", "error");
-    try {
-      const res = await fetch(`/api/posts/post/${post._id}/comment/${commentId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token")}` },
-        credentials: "include",
-        body: JSON.stringify({ text: editedText }),
-      });
-      const data = await res.json();
-      if (data.error) return showToast("Error", data.error, "error");
-
-      setPosts((prev) => ({
-        ...prev,
-        posts: (prev.posts || []).map((p) =>
-          p._id === post._id
-            ? {
-                ...p,
-                comments: p.comments.map((c) =>
-                  c._id === commentId ? { ...c, text: editedText } : c
-                ),
-              }
-            : p
-        ),
-        bookmarks: (prev.bookmarks || []).map((p) =>
-          p._id === post._id
-            ? {
-                ...p,
-                comments: p.comments.map((c) =>
-                  c._id === commentId ? { ...c, text: editedText } : c
-                ),
-              }
-            : p
-        ),
-        suggestedPosts: (prev.suggestedPosts || []).map((p) =>
-          p._id === post._id
-            ? {
-                ...p,
-                comments: p.comments.map((c) =>
-                  c._id === commentId ? { ...c, text: editedText } : c
-                ),
-              }
-            : p
-        ),
-      }));
-      showToast("Success", "Comment updated", "success");
-      setEditingCommentId(null);
-      setEditedText("");
-    } catch (error) {
-      showToast("Error", error.message, "error");
-    }
-  };
-
-  const handleDeleteComment = async (commentId) => {
-    try {
-      const res = await fetch(`/api/posts/post/${post._id}/comment/${commentId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
         credentials: "include",
       });
       const data = await res.json();
-      if (data.error) return showToast("Error", data.error, "error");
-
-      setPosts((prev) => ({
-        ...prev,
-        posts: (prev.posts || []).map((p) =>
-          p._id === post._id
-            ? { ...p, comments: p.comments.filter((c) => c._id !== commentId) }
-            : p
-        ),
-        bookmarks: (prev.bookmarks || []).map((p) =>
-          p._id === post._id
-            ? { ...p, comments: p.comments.filter((c) => c._id !== commentId) }
-            : p
-        ),
-        suggestedPosts: (prev.suggestedPosts || []).map((p) =>
-          p._id === post._id
-            ? { ...p, comments: p.comments.filter((c) => c._id !== commentId) }
-            : p
-        ),
-      }));
-      showToast("Success", "Comment deleted successfully", "success");
-    } catch (error) {
-      showToast("Error", error.message, "error");
-    }
-  };
-
-  const handleLikeComment = async (commentId, isReply = false, parentCommentId) => {
-    if (!commentId) return showToast("Error", "Invalid comment ID", "error");
-    try {
-      const endpoint = isReply
-        ? `/api/posts/post/${post._id}/comment/${parentCommentId}/reply/${commentId}/like`
-        : `/api/posts/post/${post._id}/comment/${commentId}/like`;
-      const res = await fetch(endpoint, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token")}` },
-        credentials: "include",
-      });
-      const data = await res.json();
-      if (data.error) return showToast("Error", data.error, "error");
-
-      setPosts((prev) => ({
-        ...prev,
-        posts: (prev.posts || []).map((p) =>
-          p._id === post._id
-            ? {
-                ...p,
-                comments: isReply
-                  ? p.comments.map((c) =>
-                      c._id === parentCommentId
-                        ? {
-                            ...c,
-                            replies: c.replies.map((r) =>
-                              r._id === commentId ? { ...r, likes: data.likes } : r
-                            ),
-                          }
-                        : c
-                    )
-                  : p.comments.map((c) =>
-                      c._id === commentId ? { ...c, likes: data.likes } : c
-                    ),
-              }
-            : p
-        ),
-        bookmarks: (prev.bookmarks || []).map((p) =>
-          p._id === post._id
-            ? {
-                ...p,
-                comments: isReply
-                  ? p.comments.map((c) =>
-                      c._id === parentCommentId
-                        ? {
-                            ...c,
-                            replies: c.replies.map((r) =>
-                              r._id === commentId ? { ...r, likes: data.likes } : r
-                            ),
-                          }
-                        : c
-                    )
-                  : p.comments.map((c) =>
-                      c._id === commentId ? { ...c, likes: data.likes } : c
-                    ),
-              }
-            : p
-        ),
-        suggestedPosts: (prev.suggestedPosts || []).map((p) =>
-          p._id === post._id
-            ? {
-                ...p,
-                comments: isReply
-                  ? p.comments.map((c) =>
-                      c._id === parentCommentId
-                        ? {
-                            ...c,
-                            replies: c.replies.map((r) =>
-                              r._id === commentId ? { ...r, likes: data.likes } : r
-                            ),
-                          }
-                        : c
-                    )
-                  : p.comments.map((c) =>
-                      c._id === commentId ? { ...c, likes: data.likes } : c
-                    ),
-              }
-            : p
-        ),
-      }));
-    } catch (error) {
-      showToast("Error", error.message, "error");
-    }
-  };
-
-  const renderPost = (currentPost, postUser) => {
-    if (!postUser) return null;
-
-    const getDocumentIcon = (filename) => {
-      const ext = filename?.split(".").pop()?.toLowerCase() || "";
-      switch (ext) {
-        case "pdf":
-          return <BsFileEarmarkTextFill size={24} />;
-        case "zip":
-          return <BsFileZipFill size={24} />;
-        case "doc":
-        case "docx":
-          return <BsFileWordFill size={24} />;
-        case "xls":
-        case "xlsx":
-          return <BsFileExcelFill size={24} />;
-        case "ppt":
-        case "pptx":
-          return <BsFilePptFill size={24} />;
-        case "txt":
-        case "rtf":
-          return <BsFileTextFill size={24} />;
-        default:
-          return <BsFileEarmarkTextFill size={24} />;
+      if (data.error) {
+        message.error(data.error);
+        return;
       }
-    };
+      setNewComment("");
+      message.success("Comment added");
+      await fetchComments();
+      if (socket) {
+        socket.emit("newComment", { postId: post._id, comment: data, userId: currentUser._id });
+      }
+    } catch (error) {
+      message.error(error.message || "Failed to add comment");
+    }
+  };
 
-    const getFileName = () => {
-      return currentPost.originalFilename || currentPost.media.split("/").pop() || "Unnamed Document";
-    };
+  const handleLikeComment = async (commentId) => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        message.error("No authentication token found");
+        return;
+      }
+      const res = await fetch(`/api/posts/${post._id}/comment/${commentId}/like`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.error) {
+        message.error(data.error);
+        return;
+      }
+      message.success(data.likes.includes(currentUser._id) ? "Comment liked" : "Comment unliked");
+      await fetchComments();
+      if (socket) {
+        socket.emit("likeUnlikeComment", {
+          postId: post._id,
+          commentId,
+          userId: currentUser._id,
+          likes: data.likes,
+        });
+      }
+    } catch (error) {
+      message.error(error.message || "Failed to like/unlike comment");
+    }
+  };
+
+  const getDocumentIcon = (filename) => {
+    const extension = filename?.split(".")?.pop()?.toLowerCase() || "";
+    switch (extension) {
+      case "pdf":
+        return <BsFileEarmarkTextFill size={24} />;
+      case "zip":
+        return <BsFileZipFill size={24} />;
+      case "doc":
+      case "docx":
+        return <BsFileWordFill size={24} />;
+      case "xls":
+      case "xlsx":
+        return <BsFileExcelFill size={24} />;
+      case "ppt":
+      case "pptx":
+        return <BsFilePptFill size={24} />;
+      case "txt":
+      case "rtf":
+        return <BsFileTextFill size={24} />;
+      default:
+        return <BsFileTextFill size={24} />;
+    }
+  };
+
+  const getFileName = () => {
+    return (
+      post.originalFilename ||
+      post.media?.split("/")?.pop() ||
+      "Unknown Document"
+    );
+  };
+
+  const renderPost = (post, postUser) => {
+    if (!post || !postUser) {
+      return null;
+    }
 
     return (
       <Box
-        key={currentPost._id}
-        mb={isAdminView ? 4 : 2}
+        key={post._id}
+        mb={2}
         sx={{
           width: { xs: "100%", sm: "90%", md: "600px" },
           maxWidth: "600px",
           minHeight: { xs: "auto", sm: "350px", md: "400px" },
           mx: { xs: 0, sm: "auto" },
           background: "rgba(255, 255, 255, 0.2)",
-          backdropFilter: "blur(10px)",
           borderRadius: "16px",
           border: "1px solid rgba(255, 255, 255, 0.2)",
           padding: { xs: 1, sm: 2, md: 2.5 },
@@ -443,38 +435,35 @@ const Post = ({ post, postedBy, isAdminView = false, onBanUnbanPost }) => {
           position: "relative",
         }}
       >
-        {currentPost.isBanned && (
+        {post.isBanned && (
           <Typography
+            variant="caption"
             sx={{
               position: "absolute",
               top: 10,
               left: 10,
               color: "red",
               fontWeight: "bold",
-              background: "rgba(255, 255, 255, 0.7)",
-              p: 1,
+              backgroundColor: "rgba(255, 255, 255, 0.7)",
+              padding: 1,
               borderRadius: 2,
               zIndex: 10,
             }}
           >
-            Banned by Admin
+            Banned Post
           </Typography>
         )}
-        {isAdminView && (
-          <Typography variant="caption" color="text.primary" mb={1}>
-            Post ID: {currentPost._id}
-          </Typography>
-        )}
-        <Box display="flex" justifyContent="space-between" alignItems="center">
+        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <Box display="flex" alignItems="center" gap={2}>
             <Avatar
-              sx={{ width: { xs: 32, sm: 40, md: 48 }, height: { xs: 32, sm: 40, md: 48 }, cursor: "pointer" }}
-              alt={postUser.name || "User"}
-              src={postUser.profilePic || "/default-avatar.png"}
-              onClick={(e) => {
-                e.preventDefault();
-                navigate(`/${postUser.username}`);
+              sx={{
+                width: { xs: 32, sm: 40, md: 48 },
+                height: { xs: 32, sm: 40, md: 48 },
+                cursor: "pointer",
               }}
+              alt={postUser.name || "Unknown User"}
+              src={postUser.profilePic || "/default-avatar.png"}
+              onClick={() => navigate(`/${postUser.username}`)}
             />
             <Box display="flex" alignItems="center">
               <Typography
@@ -482,109 +471,146 @@ const Post = ({ post, postedBy, isAdminView = false, onBanUnbanPost }) => {
                 fontWeight="bold"
                 color="text.primary"
                 sx={{ cursor: "pointer" }}
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate(`/${postUser.username}`);
-                }}
+                onClick={() => navigate(`/${postUser.username}`)}
               >
                 {postUser.username || "Unknown User"}
               </Typography>
               {postUser.isVerified && (
-                <VerifiedIcon
-                  color="primary"
-                  fontSize="small"
-                  sx={{ ml: 1 }}
-                />
+                <Typography variant="span" sx={{ color: "primary.main", fontSize: "small", marginLeft: 1 }}>
+                  <VerifiedIcon sx={{ fontSize: "small" }} />
+                </Typography>
               )}
               <Typography
                 variant="caption"
                 color="text.secondary"
-                sx={{ fontSize: { xs: "0.7rem", sm: "0.875rem" }, ml: 1 }}
+                sx={{ fontSize: "0.75rem", marginLeft: 1 }}
               >
-                {formatDistanceToNow(new Date(currentPost.createdAt))} ago
+                {formatDistanceToNow(new Date(post.createdAt))} ago
+                {post.isEdited && " (Edited)"}
               </Typography>
             </Box>
           </Box>
-          <IconButton onClick={handleMoreClick} size="small">
-            <MoreVert sx={{ color: "text.primary", fontSize: { xs: 20, sm: 24 } }} />
-          </IconButton>
-          <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMoreClose}>
-            {(currentUser?._id === postUser._id || currentUser?.isAdmin) && [
-              <MenuItem key="edit" onClick={handleEditPost}>
-                <Edit sx={{ mr: 1 }} /> Edit
-              </MenuItem>,
-              <MenuItem key="delete" onClick={handleDeletePost}>
-                <Delete sx={{ mr: 1 }} /> Delete
-              </MenuItem>,
-            ]}
-            <MenuItem onClick={handleDownloadPost}>
-              <Download sx={{ mr: 1 }} /> Download
-            </MenuItem>
-            {currentUser?.isAdmin && (
+          <Box>
+            <IconButton
+              onClick={handleMoreClick}
+              sx={{ color: "text.primary", fontSize: { xs: "20px", sm: "24px" } }}
+            >
+              <MoreVert />
+            </IconButton>
+            <Menu
+              anchorEl={anchorEl}
+              open={Boolean(anchorEl)}
+              onClose={handleMoreClose}
+            >
+              {(currentUser && (currentUser._id === postUser._id)) && [
+                <MenuItem
+                  key="edit"
+                  onClick={() => {
+                    handleEditPost();
+                    handleMoreClose();
+                  }}
+                >
+                  <Edit sx={{ marginRight: "10px" }} />
+                  Edit
+                </MenuItem>,
+                <MenuItem
+                  key="delete"
+                  onClick={() => {
+                    handleDeletePost();
+                    handleMoreClose();
+                  }}
+                >
+                  <Delete sx={{ marginRight: "10px" }} />
+                  Delete
+                </MenuItem>,
+              ]}
               <MenuItem
-                key="ban-unban"
                 onClick={() => {
+                  handleDownloadPost();
                   handleMoreClose();
-                  onBanUnbanPost?.(currentPost._id, currentPost.isBanned);
                 }}
               >
-                {currentPost.isBanned ? (
-                  <>
-                    <Edit sx={{ mr: 1 }} /> Unban
-                  </>
-                ) : (
-                  <>
-                    <Delete sx={{ mr: 1 }} /> Ban
-                  </>
-                )}
+                <Download sx={{ marginRight: "10px" }} />
+                Download
               </MenuItem>
-            )}
-          </Menu>
+              {currentUser?.isAdmin && (
+                post.isBanned ? (
+                  <MenuItem
+                    onClick={() => {
+                      handleUnbanPost();
+                      handleMoreClose();
+                    }}
+                  >
+                    <CheckCircle sx={{ marginRight: "10px" }} />
+                    Unban Post
+                  </MenuItem>
+                ) : (
+                  <MenuItem
+                    onClick={() => {
+                      handleBanPost();
+                      handleMoreClose();
+                    }}
+                  >
+                    <Block sx={{ marginRight: "10px" }} />
+                    Ban Post
+                  </MenuItem>
+                )
+              )}
+            </Menu>
+          </Box>
         </Box>
 
-        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", mt: 2, flex: 1 }}>
+        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 2, flex: 1 }}>
           <Typography
             variant="body2"
             color="text.primary"
-            sx={{ fontSize: { xs: "0.875rem", sm: "1rem" }, wordBreak: "break-word" }}
+            sx={{
+              fontSize: {
+                xs: "0.875rem",
+                sm: "1rem",
+              },
+              wordBreak: "break-word",
+            }}
           >
-            {currentPost.text}
+            {post.text}
           </Typography>
 
-          {currentPost.media && (
+          {post?.media && (
             <Box
               sx={{
                 display: "flex",
                 justifyContent: "center",
                 alignItems: "center",
-                mt: 2,
+                marginTop: 2,
                 width: "100%",
                 height: {
-                  xs: currentPost.mediaType === "audio" || currentPost.mediaType === "document" ? "auto" : "180px",
-                  sm: currentPost.mediaType === "audio" || currentPost.mediaType === "document" ? "auto" : "250px",
-                  md: currentPost.mediaType === "audio" || currentPost.mediaType === "document" ? "auto" : "300px",
+                  xs: post.mediaType === "audio" || post.mediaType === "document" ? "auto" : "180px",
+                  sm: post.mediaType === "audio" || post.mediaType === "document" ? "auto" : "250px",
+                  md: post.mediaType === "audio" || post.mediaType === "document" ? "auto" : "300px",
                 },
                 borderRadius: "8px",
                 overflow: "hidden",
               }}
             >
-              {currentPost.mediaType === "image" && (
+              {post.mediaType === "image" && (
                 <>
                   <img
-                    src={currentPost.media}
+                    src={post.media}
                     alt="Post"
                     style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    onError={(e) => (e.target.src = "/default-image.png")}
                   />
-                  {currentPost.isEdited && (
+                  {post.isEdited && (
                     <Typography
+                      variant="span"
                       sx={{
                         position: "absolute",
                         bottom: 10,
                         right: 10,
-                        bgcolor: "rgba(0, 0, 0, 0.6)",
+                        backgroundColor: "rgba(0, 0, 0, 0.6)",
                         color: "white",
-                        p: "2px 8px",
-                        borderRadius: 2,
+                        padding: "2px 4px",
+                        borderRadius: "2px",
                         fontSize: { xs: "0.65rem", sm: "0.75rem" },
                       }}
                     >
@@ -593,29 +619,35 @@ const Post = ({ post, postedBy, isAdminView = false, onBanUnbanPost }) => {
                   )}
                 </>
               )}
-              {currentPost.mediaType === "video" && (
-                <video
-                  src={currentPost.media}
-                  controls
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              )}
-              {currentPost.mediaType === "audio" && (
-                <Box sx={{ width: "100%", px: { xs: 1, sm: 2 }, py: 1, display: "flex", justifyContent: "center" }}>
-                  <audio
-                    src={currentPost.media}
+              {post.mediaType === "video" && (
+                <Box sx={{ height: "100%", width: "100%" }}>
+                  <video
+                    src={post.media}
                     controls
-                    style={{ width: "100%", maxWidth: "400px" }}
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    onError={(e) => (e.target.src = "/default-video.mp4")}
                   />
                 </Box>
               )}
-              {currentPost.mediaType === "document" && (
-                <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", p: 2, width: "100%" }}>
-                  <Box display="flex" alignItems="center" gap={1}>
+              {post.mediaType === "audio" && (
+                <Box sx={{ width: "100%", paddingX: { xs: 1, sm: 2 }, paddingY: 1, display: "flex", justifyContent: "center" }}>
+                  <Box sx={{ width: "100%", maxWidth: "100%" }}>
+                    <audio
+                      src={post.media}
+                      controls
+                      style={{ width: "100%", maxWidth: 400 }}
+                      onError={(e) => (e.target.src = "/default-audio.mp3")}
+                    />
+                  </Box>
+                </Box>
+              )}
+              {post.mediaType === "document" && (
+                <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 2, width: "100%" }}>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                     {getDocumentIcon(getFileName())}
                     <Typography
                       color="text.primary"
-                      sx={{ fontSize: { xs: "0.875rem", sm: "1rem" }, wordBreak: "break-word", textAlign: "center" }}
+                      sx={{ fontSize: { xs: "14px", sm: "16px" }, wordBreak: "break-word", textAlign: "center" }}
                     >
                       {getFileName()}
                     </Typography>
@@ -626,54 +658,104 @@ const Post = ({ post, postedBy, isAdminView = false, onBanUnbanPost }) => {
           )}
         </Box>
 
-        <Box sx={{ mt: "auto", width: "100%", display: "flex", justifyContent: "center" }}>
-          <Actions post={currentPost} onCommentClick={() => setCommentModalOpen(true)} />
+        <Box sx={{ marginTop: 1, width: "100%", display: "flex", justifyContent: "center", alignItems: "center" }}>
+          {currentUser?.isAdmin ? (
+            <Box sx={{ display: "flex", justifyContent: "center", gap: 2 }}>
+              <Typography variant="caption" sx={{ display: "flex", alignItems: "center" }}>
+                <ThumbUp sx={{ fontSize: 16, mr: 0.5 }} /> {post.likes?.length || 0}
+              </Typography>
+              <Typography variant="caption" sx={{ display: "flex", alignItems: "center" }}>
+                <Comment sx={{ fontSize: 16, mr: 0.5 }} /> {post.comments?.length || 0}
+              </Typography>
+              <Typography variant="caption" sx={{ display: "flex", alignItems: "center" }}>
+                <Bookmark sx={{ fontSize: 16, mr: 0.5 }} /> {post.bookmarks?.length || 0}
+              </Typography>
+              <Typography variant="caption" sx={{ display: "flex", alignItems: "center" }}>
+                <Share sx={{ fontSize: 16, mr: 0.5 }} /> {post.shares || 0}
+              </Typography>
+            </Box>
+          ) : (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, flex: 1 }}>
+              <Actions post={post} onCommentClick={() => setCommentModalOpen(true)} />
+            </Box>
+          )}
         </Box>
 
         <Modal
           open={commentModalOpen}
-          onClose={() => setCommentModalOpen(false)}
-          sx={{ display: "flex", alignItems: { xs: "flex-end", sm: "center" }, justifyContent: "center", px: { xs: 0, sm: 1 } }}
+          onClose={() => {
+            setCommentModalOpen(false);
+            setNewComment("");
+          }}
+          sx={{
+            display: "flex",
+            alignItems: { xs: "flex-end", sm: "center" },
+            justifyContent: "center",
+            px: { xs: 0, sm: 1 },
+          }}
         >
           <Box
             sx={{
               width: { xs: "100%", sm: "90%", md: "600px" },
               maxWidth: "800px",
               maxHeight: { xs: "70vh", sm: "80vh" },
-              background: "rgba(255, 255, 255, 0.2)",
+              backgroundColor: "rgba(255, 255, 255, 0.2)",
               backdropFilter: "blur(10px)",
               borderTopLeftRadius: { xs: 16, sm: 8 },
               borderTopRightRadius: { xs: 16, sm: 8 },
               borderBottomLeftRadius: { xs: 0, sm: 8 },
               borderBottomRightRadius: { xs: 0, sm: 8 },
               border: "1px solid rgba(255, 255, 255, 0.2)",
-              p: { xs: 1.5, sm: 2, md: 3 },
+              padding: { xs: 1.5, sm: 2, md: 3 },
               overflowY: "auto",
-              boxShadow: "0 4px 30px rgba(0, 0, 0, 0.1)",
+              boxShadow: "0 4px 30px rgba(0, 0, 0, 0.2)",
             }}
           >
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-              <Typography variant="h6" color="text.primary" sx={{ fontSize: { xs: "1rem", sm: "1.25rem" } }}>
+            <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+              <Typography
+                variant="h6"
+                color="text.primary"
+                sx={{ fontSize: { xs: "1rem", sm: "1.25rem" } }}
+              >
                 Comments
               </Typography>
-              <Button onClick={() => setCommentModalOpen(false)} sx={{ color: "text.primary", fontSize: { xs: "0.875rem", sm: "1rem" } }}>
+              <Button
+                variant="text"
+                sx={{
+                  color: "text.primary",
+                  fontSize: "14px",
+                }}
+                onClick={() => {
+                  setCommentModalOpen(false);
+                  setNewComment("");
+                }}
+              >
                 Close
               </Button>
             </Box>
-
-            {currentUser && (
-              <Box display="flex" gap={{ xs: 1, sm: 2 }} mb={2} flexDirection={{ xs: "column", sm: "row" }}>
-                <Avatar src={currentUser.profilePic} alt={currentUser.username} sx={{ width: { xs: 24, sm: 32 }, height: { xs: 24, sm: 32 } }} />
-                <Box flex={1}>
-                  {replyTo && <Typography variant="caption" color="text.primary" mb={1}>Replying to {replyTo.username}</Typography>}
+            {currentUser && !currentUser.isAdmin && (
+              <Box
+                sx={{
+                  display: "flex",
+                  gap: { xs: 1, sm: 2 },
+                  marginBottom: 2,
+                  flexDirection: { xs: "column", sm: "row" },
+                }}
+              >
+                <Avatar
+                  src={currentUser.profilePic}
+                  alt={currentUser.username}
+                  sx={{ width: { xs: 24, sm: 32 }, height: 32 }}
+                />
+                <Box sx={{ flex: 1 }}>
                   <TextField
                     fullWidth
                     variant="outlined"
-                    placeholder={replyTo ? "Add a reply..." : "Add a comment..."}
+                    placeholder="Add a comment..."
                     value={newComment}
                     onChange={(e) => setNewComment(e.target.value)}
                     sx={{
-                      bgcolor: "rgba(255, 255, 255, 0.3)",
+                      backgroundColor: "rgba(255, 255, 255, 0.3)",
                       backdropFilter: "blur(5px)",
                       input: { color: "text.primary" },
                       "& .MuiOutlinedInput-root": {
@@ -686,168 +768,39 @@ const Post = ({ post, postedBy, isAdminView = false, onBanUnbanPost }) => {
                   />
                 </Box>
                 <Button
+                  variant="contained"
                   onClick={handleAddComment}
                   sx={{
                     color: "primary.main",
-                    bgcolor: "rgba(255, 255, 255, 0.3)",
+                    backgroundColor: "rgba(255, 255, 255, 0.3)",
                     backdropFilter: "blur(5px)",
-                    "&:hover": { bgcolor: "rgba(255, 255, 255, 0.5)" },
+                    "&:hover": { backgroundColor: "rgba(255, 255, 255, 0.5)" },
                     fontSize: { xs: "0.875rem", sm: "1rem" },
-                    px: { xs: 1, sm: 2 },
+                    paddingX: { xs: 1, sm: 2 },
                   }}
                 >
                   Post
                 </Button>
               </Box>
             )}
-
-            {(currentPost.comments || []).length > 0 ? (
-              currentPost.comments.map((comment) => (
-                <Box
+            {(post.comments || []).length > 0 ? (
+              post.comments.map((comment) => (
+                <CommentItem
                   key={comment._id}
-                  display="flex"
-                  gap={{ xs: 1, sm: 2 }}
-                  mb={2}
-                  sx={{
-                    background: "rgba(255, 255, 255, 0.3)",
-                    backdropFilter: "blur(5px)",
-                    borderRadius: "8px",
-                    p: { xs: 1, sm: 1.5 },
-                    border: "1px solid rgba(255, 255, 255, 0.2)",
-                  }}
-                >
-                  <Avatar src={comment.userProfilePic} alt={comment.username} sx={{ width: { xs: 24, sm: 32 }, height: { xs: 24, sm: 32 } }} />
-                  <Box flex={1}>
-                    <Typography variant="body2" fontWeight="bold" color="text.primary" sx={{ fontSize: { xs: "0.875rem", sm: "1rem" } }}>
-                      {comment.username}
-                    </Typography>
-                    {editingCommentId === comment._id ? (
-                      <Box display="flex" gap={1} mt={1}>
-                        <TextField
-                          fullWidth
-                          value={editedText}
-                          onChange={(e) => setEditedText(e.target.value)}
-                          variant="outlined"
-                          size="small"
-                          sx={{
-                            bgcolor: "rgba(255, 255, 255, 0.3)",
-                            backdropFilter: "blur(5px)",
-                            input: { color: "text.primary" },
-                            "& .MuiOutlinedInput-root": {
-                              "& fieldset": { borderColor: "rgba(255, 255, 255, 0.3)" },
-                              "&:hover fieldset": { borderColor: "rgba(255, 255, 255, 0.5)" },
-                              "&.Mui-focused fieldset": { borderColor: "primary.main" },
-                            },
-                          }}
-                        />
-                        <Button size="small" onClick={() => handleEditComment(comment._id)} sx={{ color: "primary.main" }}>
-                          Save
-                        </Button>
-                      </Box>
-                    ) : (
-                      <Typography variant="body2" color="text.primary" sx={{ fontSize: { xs: "0.875rem", sm: "1rem" }, wordBreak: "break-word" }}>
-                        {comment.text}
-                      </Typography>
-                    )}
-                    <Box display="flex" gap={1} mt={1} flexWrap="wrap">
-                      <IconButton
-                        size="small"
-                        onClick={() => handleLikeComment(comment._id)}
-                        sx={{ color: comment.likes?.includes(currentUser?._id) ? "#ED4956" : "text.primary" }}
-                      >
-                        {comment.likes?.includes(currentUser?._id) ? <Favorite /> : <FavoriteBorder />}
-                        <Typography variant="caption" ml={0.5} color="text.primary" sx={{ fontSize: { xs: "0.7rem", sm: "0.875rem" } }}>
-                          {comment.likes?.length || 0}
-                        </Typography>
-                      </IconButton>
-                      <Button
-                        size="small"
-                        onClick={() => setReplyTo(comment)}
-                        sx={{ color: "text.primary", fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
-                        startIcon={<Reply />}
-                      >
-                        Reply
-                      </Button>
-                      {(comment.userId === currentUser?._id || currentPost.postedBy === currentUser?._id || currentUser?.isAdmin) && (
-                        <>
-                          <Button
-                            size="small"
-                            onClick={() => {
-                              setEditingCommentId(comment._id);
-                              setEditedText(comment.text);
-                            }}
-                            sx={{ color: "text.primary", fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            size="small"
-                            onClick={() => handleDeleteComment(comment._id)}
-                            sx={{ color: "text.primary", fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
-                          >
-                            Delete
-                          </Button>
-                        </>
-                      )}
-                    </Box>
-                    {(comment.replies || []).map((reply) => (
-                      <Box
-                        key={reply._id}
-                        display="flex"
-                        gap={{ xs: 1, sm: 2 }}
-                        mt={1}
-                        ml={4}
-                        sx={{ background: "rgba(255, 255, 255, 0.4)", backdropFilter: "blur(5px)", borderRadius: "8px", p: { xs: 1, sm: 1.5 } }}
-                      >
-                        <Avatar src={reply.userProfilePic} alt={reply.username} sx={{ width: { xs: 20, sm: 28 }, height: { xs: 20, sm: 28 } }} />
-                        <Box flex={1}>
-                          <Typography variant="body2" fontWeight="bold" color="text.primary" sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}>
-                            {reply.username}
-                          </Typography>
-                          <Typography variant="body2" color="text.primary" sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" }, wordBreak: "break-word" }}>
-                            {reply.text}
-                          </Typography>
-                          <Box display="flex" gap={1} mt={1}>
-                            <IconButton
-                              size="small"
-                              onClick={() => handleLikeComment(reply._id, true, comment._id)}
-                              sx={{ color: reply.likes?.includes(currentUser?._id) ? "#ED4956" : "text.primary" }}
-                            >
-                              {reply.likes?.includes(currentUser?._id) ? <Favorite /> : <FavoriteBorder />}
-                              <Typography variant="caption" ml={0.5} color="text.primary" sx={{ fontSize: { xs: "0.7rem", sm: "0.875rem" } }}>
-                                {reply.likes?.length || 0}
-                              </Typography>
-                            </IconButton>
-                            {(reply.userId === currentUser?._id || currentPost.postedBy === currentUser?._id || currentUser?.isAdmin) && (
-                              <>
-                                <Button
-                                  size="small"
-                                  onClick={() => {
-                                    setEditingCommentId(reply._id);
-                                    setEditedText(reply.text);
-                                  }}
-                                  sx={{ color: "text.primary", fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
-                                >
-                                  Edit
-                                </Button>
-                                <Button
-                                  size="small"
-                                  onClick={() => handleDeleteComment(reply._id)}
-                                  sx={{ color: "text.primary", fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
-                                >
-                                  Delete
-                                </Button>
-                              </>
-                            )}
-                          </Box>
-                        </Box>
-                      </Box>
-                    ))}
-                  </Box>
-                </Box>
+                  comment={comment}
+                  currentUser={currentUser}
+                  postId={post._id}
+                  postPostedBy={post.postedBy?._id?.toString() || post.postedBy}
+                  onLike={() => handleLikeComment(comment._id)}
+                  fetchComments={fetchComments}
+                />
               ))
             ) : (
-              <Typography color="text.primary" textAlign="center" sx={{ fontSize: { xs: "0.875rem", sm: "1rem" } }}>
+              <Typography
+                color="text.primary"
+                textAlign="center"
+                sx={{ fontSize: { xs: "0.875rem", sm: "1rem" } }}
+              >
                 No comments yet.
               </Typography>
             )}
@@ -857,41 +810,28 @@ const Post = ({ post, postedBy, isAdminView = false, onBanUnbanPost }) => {
     );
   };
 
+  if (isLoading) {
+    return (
+      <Skeleton
+        variant="rectangular"
+        width="100%"
+        height={400}
+        sx={{ borderRadius: "16px", mb: 2 }}
+      />
+    );
+  }
+
+  if (!user || !post) {
+    return null;
+  }
+
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
-      {isLoading ? (
-        <Box sx={{ width: { xs: "100%", sm: "90%", md: "600px" }, maxWidth: "600px", mx: { xs: 0, sm: "auto" }, p: { xs: 1, sm: 2 } }}>
-          <Box display="flex" gap={2}>
-            <Skeleton variant="circular" width={32} height={32} />
-            <Box flex={1}>
-              <Skeleton variant="text" width="40%" />
-              <Skeleton variant="text" width="60%" />
-            </Box>
-          </Box>
-          <Skeleton variant="rectangular" height={180} sx={{ mt: 2, borderRadius: "8px" }} />
-          <Box display="flex" justifyContent="center" mt={2}>
-            <Skeleton variant="text" width="50%" />
-          </Box>
-        </Box>
-      ) : isAdminView && currentUser?.isAdmin ? (
-        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", px: { xs: 1, sm: 2 }, py: 2 }}>
-          {posts.posts.length > 0 ? (
-            posts.posts.map((adminPost) => {
-              const postUser = allPostsUsers[adminPost.postedBy] || { 
-                username: "Unknown User", 
-                profilePic: "/default-avatar.png", 
-                name: "Unknown", 
-                isVerified: false 
-              };
-              return renderPost(adminPost, postUser);
-            })
-          ) : (
-            <Typography color="text.secondary">No posts available</Typography>
-          )}
-        </Box>
-      ) : user ? (
-        renderPost(post, user)
-      ) : null}
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+    >
+      {renderPost(post, user)}
     </motion.div>
   );
 };

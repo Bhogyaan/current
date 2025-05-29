@@ -7,6 +7,8 @@ const postsAtom = atom({
 		stories: [],
 		bookmarks: [],
 		suggestedPosts: [],
+		comments: [],
+		reply: [],
 		
 	},
 });

@@ -25,7 +25,7 @@ const LogoutButton = () => {
         return;
       }
 
-      localStorage.removeItem('user-threads');
+      localStorage.removeItem('user-NRBLOG');
       setUser(null);
       showToast('Success', 'Logged out successfully', 'success');
     } catch (error) {

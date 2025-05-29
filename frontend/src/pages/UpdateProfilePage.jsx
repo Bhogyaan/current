@@ -65,7 +65,7 @@ export default function UpdateProfilePage() {
 
       setUser(updatedUser);
       message.success("Profile updated successfully");
-      localStorage.setItem("user-threads", JSON.stringify(updatedUser));
+      localStorage.setItem("user-NRBLOG", JSON.stringify(updatedUser));
     } catch (error) {
       message.error(error.message);
     } finally {

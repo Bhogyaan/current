@@ -1,5 +1,4 @@
-// PostPage.jsx
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useContext } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useRecoilState, useRecoilValue } from "recoil";
 import { motion } from "framer-motion";
@@ -14,22 +13,29 @@ import {
   IconButton,
   TextField,
   Paper,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from "@mui/material";
 import {
   MoreVert,
   Edit,
   Delete,
   Download,
-  Favorite,
-  FavoriteBorder,
-  Reply,
+  ThumbUp,
+  Comment,
+  Bookmark,
+  Share,
 } from "@mui/icons-material";
 import { message } from "antd";
+import { debounce } from "lodash";
 import Actions from "../components/Actions";
 import useGetUserProfile from "../hooks/useGetUserProfile";
 import userAtom from "../atoms/userAtom";
 import postsAtom from "../atoms/postsAtom";
-import { useSocket } from "../contexts/SocketContext";
+import { SocketContext } from "../context/SocketContext";
+import CommentItem from "../components/CommentItem";
 
 const PostPage = () => {
   const { user, loading } = useGetUserProfile();
@@ -39,80 +45,68 @@ const PostPage = () => {
   const navigate = useNavigate();
   const [anchorEl, setAnchorEl] = useState(null);
   const [newComment, setNewComment] = useState("");
-  const [replyTo, setReplyTo] = useState(null);
-  const [editingCommentId, setEditingCommentId] = useState(null);
-  const [editedText, setEditedText] = useState("");
+  const [dialogComment, setDialogComment] = useState("");
+  const [isCommenting, setIsCommenting] = useState(false);
+  const [openCommentDialog, setOpenCommentDialog] = useState(false);
   const commentInputRef = useRef(null);
-  const { socket } = useSocket();
+  const dialogCommentInputRef = useRef(null);
+  const { socket } = useContext(SocketContext);
 
   const currentPost = posts.posts?.find((p) => p._id === pid);
+
+  const debouncedSetNewComment = debounce((value) => {
+    setNewComment(value);
+  }, 100);
+
+  const debouncedSetDialogComment = debounce((value) => {
+    setDialogComment(value);
+  }, 100);
 
   useEffect(() => {
     if (!socket || !pid) return;
 
     socket.emit("joinPostRoom", pid);
-    console.log(`Joined post room: post:${pid}`);
 
-    socket.on("newComment", ({ postId, comment, post }) => {
-      if (postId === pid) {
-        setPosts((prev) => ({
-          ...prev,
-          posts: prev.posts.map((p) => (p._id === postId ? post : p)),
-        }));
-      }
-    });
+    const debouncedUpdatePost = debounce((postId, post) => {
+      setPosts((prev) => ({
+        ...prev,
+        posts: prev.posts.map((p) => (p._id === postId ? post : p)),
+      }));
+    }, 300);
 
-    socket.on("newReply", ({ postId, commentId, reply, post }) => {
+    const handleNewComment = ({ postId, comment, post }) => {
       if (postId === pid) {
-        setPosts((prev) => ({
-          ...prev,
-          posts: prev.posts.map((p) => (p._id === postId ? post : p)),
-        }));
+        debouncedUpdatePost(postId, post);
+        fetchComments();
       }
-    });
+    };
+
+    socket.on("newComment", handleNewComment);
 
     socket.on("likeUnlikePost", ({ postId, userId, likes, post }) => {
       if (postId === pid) {
-        setPosts((prev) => ({
-          ...prev,
-          posts: prev.posts.map((p) => (p._id === postId ? { ...p, likes } : p)),
-        }));
+        debouncedUpdatePost(postId, post);
       }
     });
 
     socket.on("likeUnlikeComment", ({ postId, commentId, userId, likes, post }) => {
       if (postId === pid) {
-        setPosts((prev) => ({
-          ...prev,
-          posts: prev.posts.map((p) => (p._id === postId ? post : p)),
-        }));
-      }
-    });
-
-    socket.on("likeUnlikeReply", ({ postId, commentId, replyId, userId, likes, post }) => {
-      if (postId === pid) {
-        setPosts((prev) => ({
-          ...prev,
-          posts: prev.posts.map((p) => (p._id === postId ? post : p)),
-        }));
+        debouncedUpdatePost(postId, post);
+        fetchComments();
       }
     });
 
     socket.on("editComment", ({ postId, commentId, text, post }) => {
       if (postId === pid) {
-        setPosts((prev) => ({
-          ...prev,
-          posts: prev.posts.map((p) => (p._id === postId ? post : p)),
-        }));
+        debouncedUpdatePost(postId, post);
+        fetchComments();
       }
     });
 
     socket.on("deleteComment", ({ postId, commentId, post }) => {
       if (postId === pid) {
-        setPosts((prev) => ({
-          ...prev,
-          posts: prev.posts.map((p) => (p._id === postId ? post : p)),
-        }));
+        debouncedUpdatePost(postId, post);
+        fetchComments();
       }
     });
 
@@ -125,35 +119,52 @@ const PostPage = () => {
 
     return () => {
       socket.emit("leavePostRoom", pid);
-      socket.off("newComment");
-      socket.off("newReply");
+      socket.off("newComment", handleNewComment);
       socket.off("likeUnlikePost");
       socket.off("likeUnlikeComment");
-      socket.off("likeUnlikeReply");
       socket.off("editComment");
       socket.off("deleteComment");
       socket.off("postDeleted");
-      console.log(`Left post room: post:${pid}`);
     };
   }, [socket, pid, setPosts, navigate, user]);
 
-  useEffect(() => {
-    const getPost = async () => {
-      setPosts((prev) => ({ ...prev, posts: [] }));
-      try {
-        const res = await fetch(`/api/posts/${pid}`);
-        const data = await res.json();
-        if (data.error) {
-          message.error(data.error);
-          return;
-        }
-        setPosts((prev) => ({ ...prev, posts: [data] }));
-      } catch (error) {
-        message.error(error.message);
+  const fetchComments = async () => {
+    if (!pid) {
+      message.error("Invalid post ID");
+      return;
+    }
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        message.error("No authentication token found");
+        return;
       }
-    };
-    if (!currentPost) getPost();
-  }, [pid, setPosts, currentPost]);
+      const res = await fetch(`/api/posts/${pid}/comments?page=1&limit=20`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (data.error) {
+        console.error("Fetch comments error:", data.error);
+        message.error(data.error);
+        return;
+      }
+      setPosts((prev) => ({
+        ...prev,
+        posts: prev.posts.map((p) =>
+          p._id === pid ? { ...p, comments: data.comments, commentCount: data.totalComments } : p
+        ),
+      }));
+    } catch (error) {
+      console.error("Fetch comments exception:", error);
+      message.error("Failed to fetch comments");
+    }
+  };
+
+  useEffect(() => {
+    if (!currentPost) fetchComments();
+  }, [pid, currentPost]);
 
   const handleDeletePost = async () => {
     if (!window.confirm("Are you sure you want to delete this post?")) return;
@@ -198,279 +209,166 @@ const PostPage = () => {
     URL.revokeObjectURL(url);
   };
 
+  const handleBanUnbanPost = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`/api/posts/${currentPost._id}/ban`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.error) {
+        message.error(data.error);
+        return;
+      }
+      message.success(currentPost.isBanned ? "Post unbanned" : "Post banned");
+      setPosts((prev) => ({
+        ...prev,
+        posts: prev.posts.map((p) =>
+          p._id === currentPost._id ? { ...p, isBanned: !p.isBanned } : p
+        ),
+      }));
+    } catch (error) {
+      message.error(error.message || "Failed to ban/unban post");
+    }
+  };
+
   const handleMoreClick = (event) => setAnchorEl(event.currentTarget);
   const handleMoreClose = () => setAnchorEl(null);
 
   const handleAddComment = async () => {
-    if (!newComment.trim()) return message.error("Comment cannot be empty");
+    const commentText = openCommentDialog ? dialogComment : newComment;
+    if (!commentText.trim()) {
+      message.error("Comment cannot be empty");
+      return;
+    }
+    setIsCommenting(true);
     try {
-      const res = await fetch(
-        `/api/posts/post/${currentPost._id}/comment${replyTo ? `/${replyTo._id}/reply` : ""}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-          body: JSON.stringify({ text: newComment }),
-        }
-      );
+      const res = await fetch(`/api/posts/${currentPost._id}/comment`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: JSON.stringify({ text: commentText }),
+      });
       const data = await res.json();
-      if (data.error) return message.error(data.error);
-
+      if (data.error) {
+        message.error(data.error);
+        return;
+      }
       setNewComment("");
-      setReplyTo(null);
-      message.success(replyTo ? "Reply added" : "Comment added");
+      setDialogComment("");
+      setOpenCommentDialog(false);
+      message.success("Comment added");
+      fetchComments();
+      if (socket) {
+        socket.emit("newComment", { postId: currentPost._id, comment: data, userId: currentUser._id });
+      }
     } catch (error) {
       message.error(error.message);
+    } finally {
+      setIsCommenting(false);
     }
   };
 
-  const handleEditComment = async (commentId) => {
-    if (!editedText.trim()) return message.error("Comment text cannot be empty");
-    try {
-      const res = await fetch(`/api/posts/post/${currentPost._id}/comment/${commentId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-        body: JSON.stringify({ text: editedText }),
-        credentials: "include",
-      });
-      const data = await res.json();
-      if (data.error) return message.error(data.error);
-
-      message.success("Comment updated");
-      setEditingCommentId(null);
-      setEditedText("");
-    } catch (error) {
-      message.error(error.message);
+  const handleKeyPress = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleAddComment();
     }
   };
 
-  const handleDeleteComment = async (commentId) => {
+  const handleEdit = async (commentId, text) => {
     try {
-      const res = await fetch(`/api/posts/post/${currentPost._id}/comment/${commentId}`, {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-      });
-      const data = await res.json();
-      if (data.error) return message.error(data.error);
-
-      message.success("Comment deleted successfully");
-    } catch (error) {
-      message.error(error.message);
-    }
-  };
-
-  const handleLikeComment = async (commentId, replyId = null) => {
-    if (!currentUser) return message.error("You must be logged in to like a comment");
-    try {
-      const endpoint = replyId
-        ? `/api/posts/post/${currentPost._id}/comment/${commentId}/reply/${replyId}/like`
-        : `/api/posts/post/${currentPost._id}/comment/${commentId}/like`;
+      const endpoint = `/api/posts/${currentPost._id}/comment/${commentId}`;
       const res = await fetch(endpoint, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${localStorage.getItem("token")}`,
         },
+        body: JSON.stringify({ text }),
       });
       const data = await res.json();
-      if (data.error) return message.error(data.error);
+      if (data.error) {
+        message.error(data.error);
+        return;
+      }
+      message.success("Comment updated");
+      fetchComments();
+      if (socket) {
+        socket.emit("editComment", { postId: currentPost._id, commentId, text, userId: currentUser._id });
+      }
     } catch (error) {
       message.error(error.message);
     }
   };
 
-  const handleCommentClick = () => {
-    if (commentInputRef.current) {
-      commentInputRef.current.focus();
+  const handleDelete = async (commentId) => {
+    try {
+      const endpoint = `/api/posts/${currentPost._id}/comment/${commentId}`;
+      const res = await fetch(endpoint, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+      });
+      const data = await res.json();
+      if (data.error) {
+        message.error(data.error);
+        return;
+      }
+      message.success("Comment deleted");
+      fetchComments();
+      if (socket) {
+        socket.emit("deleteComment", { postId: currentPost._id, commentId, userId: currentUser._id });
+      }
+    } catch (error) {
+      message.error(error.message);
     }
   };
 
-  const renderComments = (comments, depth = 0) => {
-    return comments.map((comment) => (
-      <Paper
-        elevation={2}
-        key={comment._id}
-        sx={{
-          p: 2,
-          mb: 2,
-          ml: depth * 4,
-          bgcolor: "rgba(255, 255, 255, 0.2)",
-          backdropFilter: "blur(6px)",
-          borderRadius: "8px",
-        }}
-      >
-        <Box display="flex" gap={2}>
-          <Avatar
-            src={comment.userProfilePic}
-            alt={comment.username}
-            sx={{ width: 32, height: 32 }}
-          />
-          <Box flex={1}>
-            <Typography fontWeight="bold" color="#000000">
-              {comment.username}
-            </Typography>
-            {editingCommentId === comment._id ? (
-              <Box display="flex" gap={1} mt={1}>
-                <TextField
-                  fullWidth
-                  value={editedText}
-                  onChange={(e) => setEditedText(e.target.value)}
-                  size="small"
-                  sx={{
-                    bgcolor: "rgba(255, 255, 255, 0.3)",
-                    "& .MuiOutlinedInput-root": {
-                      "& fieldset": { borderColor: "rgba(255, 255, 255, 0.3)" },
-                      "&:hover fieldset": {
-                        borderColor: "rgba(255, 255, 255, 0.5)",
-                      },
-                    },
-                  }}
-                />
-                <Button
-                  size="small"
-                  onClick={() => handleEditComment(comment._id)}
-                >
-                  Save
-                </Button>
-                <Button
-                  size="small"
-                  onClick={() => setEditingCommentId(null)}
-                >
-                  Cancel
-                </Button>
-              </Box>
-            ) : (
-              <Typography sx={{ wordBreak: "break-word" }}>
-                {comment.text}
-              </Typography>
-            )}
-            <Box display="flex" gap={1} mt={1} flexWrap="wrap">
-              <IconButton
-                size="small"
-                onClick={() => handleLikeComment(comment._id)}
-              >
-                {comment.likes?.includes(currentUser?._id) ? (
-                  <Favorite color="error" fontSize="small" />
-                ) : (
-                  <FavoriteBorder fontSize="small" />
-                )}
-                <Typography variant="caption" ml={0.5}>
-                  {comment.likes?.length || 0}
-                </Typography>
-              </IconButton>
-              <Button
-                size="small"
-                onClick={() => setReplyTo(comment)}
-                startIcon={<Reply />}
-                sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
-              >
-                Reply
-              </Button>
-              {(comment.userId === currentUser?._id ||
-                currentPost?.postedBy === currentUser?._id) && (
-                <>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      setEditingCommentId(comment._id);
-                      setEditedText(comment.text);
-                    }}
-                    sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={() => handleDeleteComment(comment._id)}
-                    sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
-                  >
-                    Delete
-                  </Button>
-                </>
-              )}
-            </Box>
-          </Box>
-        </Box>
-        {comment.replies?.length > 0 &&
-          comment.replies.map((reply) => (
-            <Paper
-              elevation={1}
-              key={reply._id}
-              sx={{
-                p: 2,
-                mt: 1,
-                ml: (depth + 1) * 4,
-                bgcolor: "rgba(255, 255, 255, 0.15)",
-                borderRadius: "8px",
-              }}
-            >
-              <Box display="flex" gap={2}>
-                <Avatar
-                  src={reply.userProfilePic}
-                  alt={reply.username}
-                  sx={{ width: 28, height: 28 }}
-                />
-                <Box flex={1}>
-                  <Typography
-                    fontWeight="bold"
-                    fontSize="0.875rem"
-                    color="#000000"
-                  >
-                    {reply.username}
-                  </Typography>
-                  <Typography
-                    fontSize="0.875rem"
-                    sx={{ wordBreak: "break-word" }}
-                  >
-                    {reply.text}
-                  </Typography>
-                  <Box display="flex" gap={1} mt={1}>
-                    <IconButton
-                      size="small"
-                      onClick={() => handleLikeComment(comment._id, reply._id)}
-                    >
-                      {reply.likes?.includes(currentUser?._id) ? (
-                        <Favorite color="error" fontSize="small" />
-                      ) : (
-                        <FavoriteBorder fontSize="small" />
-                      )}
-                      <Typography variant="caption" ml={0.5}>
-                        {reply.likes?.length || 0}
-                      </Typography>
-                    </IconButton>
-                    <Button
-                      size="small"
-                      onClick={() => setReplyTo({ ...reply, _id: comment._id })}
-                      startIcon={<Reply />}
-                      sx={{ fontSize: "0.75rem" }}
-                    >
-                      Reply
-                    </Button>
-                    {(reply.userId === currentUser?._id ||
-                      currentPost?.postedBy === currentUser?._id) && (
-                      <Button
-                        size="small"
-                        onClick={() => handleDeleteComment(reply._id)}
-                        sx={{ fontSize: "0.75rem" }}
-                      >
-                        Delete
-                      </Button>
-                    )}
-                  </Box>
-                </Box>
-              </Box>
-            </Paper>
-          ))}
-      </Paper>
-    ));
+  const handleLike = async (commentId) => {
+    if (!currentUser) return message.error("You must be logged in to like");
+    try {
+      const endpoint = `/api/posts/${currentPost._id}/comment/${commentId}/like`;
+      const res = await fetch(endpoint, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+      });
+      const data = await res.json();
+      if (data.error) {
+        console.error("Like comment error:", data.error);
+        message.error(data.error);
+        return;
+      }
+      message.success(data.likes.includes(currentUser._id) ? "Liked" : "Unliked");
+      fetchComments();
+      if (socket) {
+        socket.emit("likeUnlikeComment", {
+          postId: currentPost._id,
+          commentId,
+          userId: currentUser._id,
+          likes: data.likes,
+        });
+      }
+    } catch (error) {
+      console.error("Like comment exception:", error);
+      message.error(error.message);
+    }
+  };
+
+  const handleCommentClick = () => {
+    if (!currentUser) {
+      message.error("Please log in to comment");
+      navigate("/auth");
+      return;
+    }
+    setOpenCommentDialog(true);
   };
 
   if (!user && loading) {
@@ -488,36 +386,38 @@ const PostPage = () => {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.5 }}
-      style={{ backgroundColor: "#F1F3F5", minHeight: "100vh", padding: "24px" }}
+      style={{ backgroundColor: "#F5F5F5", minHeight: "100vh", padding: { xs: "8px", sm: "16px" } }}
     >
       <Paper
         elevation={3}
         sx={{
-          maxWidth: 800,
+          maxWidth: 700,
           mx: "auto",
-          p: 3,
-          bgcolor: "rgba(255, 255, 255, 0.2)",
-          backdropFilter: "blur(6px)",
+          bgcolor: "white",
           borderRadius: "12px",
-          border: "1px solid rgba(255, 255, 255, 0.2)",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
+          overflow: "hidden",
         }}
       >
-        <Box display="flex" justifyContent="space-between" alignItems="center">
-          <Box display="flex" alignItems="center" gap={1}>
-            <Avatar src={user.profilePic} alt={user.username} />
-            <Typography fontWeight="bold">{user.username}</Typography>
+        <Box display="flex" justifyContent="space-between" alignItems="center" p={2}>
+          <Box display="flex" alignItems="center" gap={1.5}>
+            <Avatar src={user.profilePic} alt={user.username} sx={{ width: 40, height: 40 }} />
+            <Typography fontWeight="600" fontSize="16px">{user.username}</Typography>
           </Box>
           <Box display="flex" alignItems="center" gap={1}>
-            <Typography variant="caption">
+            <Typography variant="caption" color="text.secondary" fontSize="12px">
               {new Date(currentPost.createdAt).toLocaleString()}
             </Typography>
-            <IconButton onClick={handleMoreClick}>
-              <MoreVert />
+            <IconButton onClick={handleMoreClick} size="small">
+              <MoreVert fontSize="small" />
             </IconButton>
             <Menu
               anchorEl={anchorEl}
               open={Boolean(anchorEl)}
               onClose={handleMoreClose}
+              PaperProps={{
+                sx: { borderRadius: "8px", boxShadow: "0 2px 10px rgba(0,0,0,0.1)" },
+              }}
             >
               {(currentUser?._id === user._id || currentUser?.isAdmin) && [
                 <MenuItem key="edit" onClick={handleEditPost}>
@@ -530,49 +430,50 @@ const PostPage = () => {
               <MenuItem onClick={handleDownloadPost}>
                 <Download fontSize="small" sx={{ mr: 1 }} /> Download
               </MenuItem>
+              {currentUser?.isAdmin && (
+                <MenuItem
+                  onClick={() => {
+                    handleBanUnbanPost();
+                    handleMoreClose();
+                  }}
+                >
+                  {currentPost.isBanned ? "Unban Post" : "Ban Post"}
+                </MenuItem>
+              )}
             </Menu>
           </Box>
         </Box>
 
-        <Typography my={2} sx={{ wordBreak: "break-word" }}>
-          {currentPost.text}
-        </Typography>
-
         {currentPost.media && (
-          <Box
-            my={2}
-            borderRadius={1}
-            overflow="hidden"
-            border="1px solid rgba(255, 255, 255, 0.3)"
-          >
+          <Box borderRadius={0} overflow="hidden">
             {currentPost.mediaType === "image" && (
               <img
                 src={currentPost.media}
                 alt="Post media"
-                style={{ width: "100%", objectFit: "cover" }}
+                style={{ width: "100%", objectFit: "contain", maxHeight: "500px" }}
               />
             )}
             {currentPost.mediaType === "video" && (
               <video
                 controls
                 src={currentPost.media}
-                style={{ width: "100%" }}
+                style={{ width: "100%", maxHeight: "500px" }}
               />
             )}
             {currentPost.mediaType === "audio" && (
               <audio
                 controls
                 src={currentPost.media}
-                style={{ width: "100%" }}
+                style={{ width: "100%", padding: "16px" }}
               />
             )}
             {currentPost.mediaType === "document" && (
               <a
                 href={currentPost.media}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
               >
-                <Button variant="outlined" sx={{ m: 2 }}>
+                <Button variant="outlined" sx={{ m: 2, fontSize: "14px", borderRadius: "8px" }}>
                   View Document
                 </Button>
               </a>
@@ -580,59 +481,158 @@ const PostPage = () => {
           </Box>
         )}
 
-        <Actions post={currentPost} onCommentClick={handleCommentClick} />
+        <Box p={2}>
+          {currentUser?.isAdmin ? (
+            <Box sx={{ display: "flex", justifyContent: "center", gap: 2, mb: 2 }}>
+              <Typography variant="caption" sx={{ display: "flex", alignItems: "center" }}>
+                <ThumbUp sx={{ fontSize: 16, mr: 0.5 }} /> {currentPost.likes?.length || 0}
+              </Typography>
+              <Typography variant="caption" sx={{ display: "flex", alignItems: "center" }}>
+                <Comment sx={{ fontSize: 16, mr: 0.5 }} /> {currentPost.comments?.length || 0}
+              </Typography>
+              <Typography variant="caption" sx={{ display: "flex", alignItems: "center" }}>
+                <Bookmark sx={{ fontSize: 16, mr: 0.5 }} /> {currentPost.bookmarks?.length || 0}
+              </Typography>
+            </Box>
+          ) : (
+            <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
+              <Actions post={currentPost} onCommentClick={handleCommentClick} />
+            </Box>
+          )}
+          <Typography fontSize="15px" sx={{ wordBreak: "break-word" }} mb={2}>
+            <strong>{user.username}</strong> {currentPost.text}
+          </Typography>
 
-        <Divider sx={{ my: 2 }} />
+          <Divider sx={{ my: 2, borderColor: "rgba(0,0,0,0.1)" }} />
 
-        {currentUser && (
-          <Box display="flex" gap={2} mb={2}>
-            <Avatar
-              src={currentUser.profilePic}
-              alt={currentUser.username}
-              sx={{ width: 32, height: 32 }}
-            />
-            <Box flex={1}>
-              {replyTo && (
-                <Typography variant="caption" mb={1}>
-                  Replying to {replyTo.username}
-                </Typography>
-              )}
+          {currentUser && !currentUser.isAdmin && (
+            <Box display="flex" gap={1.5} mb={3} alignItems="center">
+              <Avatar
+                src={currentUser.profilePic}
+                alt={currentUser.username}
+                sx={{ width: 32, height: 32 }}
+              />
               <TextField
                 inputRef={commentInputRef}
                 fullWidth
                 variant="outlined"
-                placeholder={replyTo ? "Add a reply..." : "Add a comment..."}
+                placeholder="Add a comment..."
                 value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
+                onChange={(e) => debouncedSetNewComment(e.target.value)}
+                onKeyPress={handleKeyPress}
+                size="small"
                 sx={{
-                  bgcolor: "rgba(255, 255, 255, 0.3)",
                   "& .MuiOutlinedInput-root": {
-                    "& fieldset": { borderColor: "rgba(255, 255, 255, 0.3)" },
-                    "&:hover fieldset": {
-                      borderColor: "rgba(255, 255, 255, 0.5)",
-                    },
+                    borderRadius: "24px",
+                    bgcolor: "#F5F5F5",
+                    "& fieldset": { border: "1px solid #E0E0E0" },
+                    "&:hover fieldset": { borderColor: "#B0B0B0" },
+                    "&.Mui-focused fieldset": { borderColor: "#1976D2" },
                   },
+                  "& .MuiInputBase-input": { fontSize: "15px", py: 1.2 },
                 }}
               />
+              <Button
+                onClick={handleAddComment}
+                disabled={!newComment.trim() || isCommenting}
+                sx={{
+                  fontSize: "14px",
+                  color: "#1976D2",
+                  fontWeight: "600",
+                  borderRadius: "20",
+                  px: 2,
+                  "&:hover": { bgcolor: "#E3F2FD" },
+                }}
+              >
+                {isCommenting ? "Posting..." : "Post"}
+              </Button>
             </Box>
-            <Button
-              onClick={handleAddComment}
-              disabled={!newComment.trim()}
-              variant="contained"
-            >
-              Post
-            </Button>
-          </Box>
-        )}
-
-        <Box>
-          {currentPost.comments?.length > 0 ? (
-            renderComments(currentPost.comments.filter((c) => !c.replyTo))
-          ) : (
-            <Typography>No comments yet.</Typography>
           )}
+
+          <Box>
+            {currentPost.comments?.length > 0 ? (
+              currentPost.comments.map((comment) => (
+                <CommentItem
+                  key={comment._id}
+                  comment={comment}
+                  currentUser={currentUser}
+                  postId={currentPost._id}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                  onLike={handleLike}
+                  fetchComments={fetchComments}
+                />
+              ))
+            ) : (
+              <Typography variant="body2" color="text.secondary" fontSize="14px" textAlign="center">
+                No comments yet. Be the first to comment!
+              </Typography>
+            )}
+          </Box>
         </Box>
       </Paper>
+
+      <Dialog
+        open={openCommentDialog}
+        onClose={() => {
+          setOpenCommentDialog(false);
+          setDialogComment("");
+        }}
+        fullWidth
+        maxWidth="sm"
+        PaperProps={{
+          sx: { borderRadius: "12px", boxShadow: "0 4px 20px rgba(0,0,0,0.1)" },
+        }}
+      >
+        <DialogTitle sx={{ fontSize: "18px", fontWeight: 600 }}>Add a Comment</DialogTitle>
+        <DialogContent>
+          <TextField
+            inputRef={dialogCommentInputRef}
+            autoFocus
+            fullWidth
+            variant="outlined"
+            placeholder="Write your comment..."
+            value={dialogComment}
+            onChange={(e) => debouncedSetDialogComment(e.target.value)}
+            multiline
+            rows={4}
+            sx={{
+              "& .MuiOutlinedInput-root": {
+                "& fieldset": { borderColor: "rgba(0,0,0,0.1)" },
+                "&:hover fieldset": { borderColor: "rgba(0,0,0,0.2)" },
+                "&.Mui-focused fieldset": { borderColor: "#1976D2" },
+                "& .MuiInputBase-input": { fontSize: "15px" },
+                mt: 1,
+              },
+            }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            variant="text"
+            onClick={() => {
+              setOpenCommentDialog(false);
+              setDialogComment("");
+            }}
+            sx={{ fontSize: "14px", color: "text.secondary" }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleAddComment}
+            variant="contained"
+            disabled={!dialogComment.trim() || isCommenting}
+            sx={{
+              fontSize: "14px",
+              borderRadius: "8px",
+              bgcolor: "#1976D2",
+              "&:hover": { bgcolor: "#1565C0" },
+            }}
+          >
+            {isCommenting ? "Posting..." : "Post"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </motion.div>
   );
 };

@@ -6,6 +6,20 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      '/follow': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/follow/, '/follow'), 
+        configure: (proxy, options) => {
+          proxy.on('proxyReq', (proxyReq, req, res) => {
+            console.log(`Proxying ${req.method} ${req.url} to ${options.target}`);
+          });
+          proxy.on('error', (err, req, res) => {
+            console.error('Proxy error:', err);
+          });
+        },
+      },
       "/api": {
         target: "http://localhost:5000",
         changeOrigin: true,

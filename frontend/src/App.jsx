@@ -1,4 +1,4 @@
-import React, { useState, lazy, Suspense, useTransition } from "react";
+import { useState, lazy, Suspense, useTransition, useEffect } from "react";
 import {
   Box,
   Container,
@@ -7,15 +7,19 @@ import {
   ThemeProvider,
   createTheme,
 } from "@mui/material";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { useRecoilValue } from "recoil";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { useRecoilValue, useSetRecoilState } from "recoil";
 import userAtom from "./atoms/userAtom";
 import { SocketContextProvider } from "./context/SocketContext";
 import { Skeleton } from "antd";
 import TopNav from "./components/TopNav";
 import BottomNavigation from "./components/BottomNav";
-import Notification from "./components/Notification";
 import ErrorBoundary from "./components/ErrorBoundary";
+
+// react-toastify
+import { ToastContainer, toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+import { FaCheckCircle, FaInfoCircle, FaExclamationTriangle, FaTimesCircle } from "react-icons/fa";
 
 // Lazy-loaded pages
 const UserPage = lazy(() => import("./pages/UserPage"));
@@ -31,12 +35,13 @@ const SearchPage = lazy(() => import("./pages/SearchPage"));
 const EditProfile = lazy(() => import("./components/EditProfile"));
 const EditPostPage = lazy(() => import("./pages/EditPostPage"));
 const AdminProfilePage = lazy(() => import("./pages/AdminProfilePage"));
+const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
-// Dark theme matching AuthPage.jsx
+// Dark theme
 const theme = createTheme({
   palette: {
     mode: "dark",
-    primary: { main: "#a78bfa" },
+    primary: { main: "#8515fc" },
     secondary: { main: "#8b5cf6" },
     background: { default: "#1a1a1a", paper: "rgba(255, 255, 255, 0.05)" },
     text: { primary: "#ffffff", secondary: "rgba(255, 255, 255, 0.7)" },
@@ -62,13 +67,90 @@ const theme = createTheme({
   },
 });
 
+// Custom toast configuration
+const toastConfig = {
+  position: "top-center",
+  autoClose: 3000,
+  hideProgressBar: false,
+  closeOnClick: true,
+  pauseOnHover: true,
+  draggable: true,
+  progress: undefined,
+  theme: "dark",
+};
+
+// Custom toast icons
+const toastIcons = {
+  success: <FaCheckCircle />,
+  info: <FaInfoCircle />,
+  warning: <FaExclamationTriangle />,
+  error: <FaTimesCircle />,
+};
+
+// Custom toast function
+const showToast = (type, message) => {
+  toast[type](message, {
+    ...toastConfig,
+    icon: toastIcons[type],
+  });
+};
+
+// Protected Route Component
+const ProtectedRoute = ({ element, requireAdmin = false }) => {
+  const user = useRecoilValue(userAtom);
+  if (!user) {
+    showToast("error", "Please log in to access this page.");
+    return <Navigate to="/auth" replace />;
+  }
+  if (requireAdmin && !user.isAdmin) {
+    showToast("error", "Admin access required.");
+    return <Navigate to="/" replace />;
+  }
+  return element;
+};
+
 function App() {
   const user = useRecoilValue(userAtom);
+  const setUser = useSetRecoilState(userAtom);
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const isSmallScreen = useMediaQuery("(max-width:501px)");
   const isMediumScreenOrLarger = useMediaQuery("(min-width:501px)");
   const [isOpen, setIsOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  // Initialize user on app load
+  useEffect(() => {
+    const initializeUser = async () => {
+      try {
+        const token = localStorage.getItem("token");
+        if (token) {
+          const res = await fetch("/api/users/me", {
+            headers: { Authorization: `Bearer ${token}` },
+            credentials: "include",
+          });
+          const data = await res.json();
+          if (data.error) {
+            console.error("Failed to fetch user:", data.error);
+            localStorage.removeItem("token");
+            showToast("error", "Session expired. Please log in again.");
+            navigate("/auth");
+            return;
+          }
+          setUser(data);
+        }
+      } catch (error) {
+        console.error("Error initializing user:", error.message);
+        localStorage.removeItem("token");
+        showToast("error", "Failed to authenticate. Please log in.");
+        navigate("/auth");
+      }
+    };
+
+    if (!user) {
+      initializeUser();
+    }
+  }, [setUser, navigate, user]);
 
   const handleOpen = () => {
     startTransition(() => {
@@ -104,7 +186,21 @@ function App() {
             bgcolor="background.default"
             color="text.primary"
           >
-            <Notification />
+            <ToastContainer
+              position="top-center"
+              autoClose={3000}
+              hideProgressBar={false}
+              newestOnTop={false}
+              closeOnClick
+              rtl={false}
+              pauseOnFocusLoss
+              draggable
+              pauseOnHover
+              theme="dark"
+              style={{
+                fontFamily: theme.typography.fontFamily,
+              }}
+            />
             {isMediumScreenOrLarger && pathname !== "/auth" && user && (
               <TopNav
                 user={user}
@@ -123,7 +219,7 @@ function App() {
                 <Routes>
                   <Route
                     path="/"
-                    element={user ? <HomePage /> : <Navigate to="/auth" replace />}
+                    element={<ProtectedRoute element={<HomePage />} />}
                   />
                   <Route
                     path="/auth"
@@ -131,15 +227,13 @@ function App() {
                   />
                   <Route
                     path="/update"
-                    element={
-                      user ? <UpdateProfilePage /> : <Navigate to="/auth" replace />
-                    }
+                    element={<ProtectedRoute element={<UpdateProfilePage />} />}
                   />
                   <Route
                     path="/create-post"
                     element={
-                      user ? (
-                        <Suspense fallback={<LoadingSkeleton />}>
+                      <ProtectedRoute
+                        element={
                           <Modal
                             open={true}
                             onClose={() => navigate("/")}
@@ -167,67 +261,52 @@ function App() {
                               />
                             </Box>
                           </Modal>
-                        </Suspense>
-                      ) : (
-                        <Navigate to="/auth" replace />
-                      )
+                        }
+                      />
                     }
                   />
-                  <Route path="/edit-post/:id" element={<EditPostPage />} />
+                  <Route
+                    path="/edit-post/:id"
+                    element={<ProtectedRoute element={<EditPostPage />} />}
+                  />
                   <Route
                     path="/:username"
-                    element={user ? <UserPage /> : <Navigate to="/auth" replace />}
+                    element={<ProtectedRoute element={<UserPage />} />}
                   />
                   <Route
                     path="/admin/:username"
-                    element={
-                      user?.isAdmin ? (
-                        <AdminProfilePage />
-                      ) : (
-                        <Navigate to="/" replace />
-                      )
-                    }
+                    element={<ProtectedRoute element={<AdminProfilePage />} requireAdmin />}
                   />
                   <Route
                     path="/edit-profile"
-                    element={
-                      user ? <EditProfile /> : <Navigate to="/auth" replace />
-                    }
+                    element={<ProtectedRoute element={<EditProfile />} />}
                   />
-                  <Route path="/:username/post/:pid" element={<PostPage />} />
+                  <Route
+                    path="/:username/post/:pid"
+                    element={<ProtectedRoute element={<PostPage />} />}
+                  />
                   <Route
                     path="/chat"
-                    element={user ? <ChatPage /> : <Navigate to="/auth" replace />}
+                    element={<ProtectedRoute element={<ChatPage />} />}
                   />
                   <Route
                     path="/settings"
-                    element={
-                      user ? <SettingsPage /> : <Navigate to="/auth" replace />
-                    }
+                    element={<ProtectedRoute element={<SettingsPage />} />}
                   />
                   <Route
                     path="/dashboard"
-                    element={
-                      user ? <DashboardPage /> : <Navigate to="/auth" replace />
-                    }
+                    element={<ProtectedRoute element={<DashboardPage />} />}
                   />
                   <Route
                     path="/search"
-                    element={user ? <SearchPage /> : <Navigate to="/auth" replace />}
+                    element={<ProtectedRoute element={<SearchPage />} />}
                   />
-                  <Route
-                    path="*"
-                    element={
-                      <Box sx={{ textAlign: "center", py: 4 }}>
-                        404 - Page Not Found
-                      </Box>
-                    }
-                  />
+                  <Route path="*" element={<NotFoundPage />} />
                 </Routes>
               </Suspense>
             </Container>
 
-            <Suspense fallback={<LoadingSkeleton />}>
+            {isOpen && (
               <Modal
                 open={isOpen}
                 onClose={handleClose}
@@ -248,14 +327,16 @@ function App() {
                     overflowY: "auto",
                   }}
                 >
-                  <CreatePost
-                    isOpen={isOpen}
-                    onClose={handleClose}
-                    onPostCreated={handleClose}
-                  />
+                  <Suspense fallback={<LoadingSkeleton />}>
+                    <CreatePost
+                      isOpen={isOpen}
+                      onClose={handleClose}
+                      onPostCreated={handleClose}
+                    />
+                  </Suspense>
                 </Box>
               </Modal>
-            </Suspense>
+            )}
 
             {isSmallScreen && pathname !== "/auth" && user && (
               <BottomNavigation onOpenCreatePost={handleOpen} />
@@ -268,3 +349,4 @@ function App() {
 }
 
 export default App;
+export { showToast };

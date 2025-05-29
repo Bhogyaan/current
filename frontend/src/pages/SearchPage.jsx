@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
   Box,
@@ -12,31 +12,41 @@ import {
 } from "@mui/material";
 import { Search as SearchIcon } from "@mui/icons-material";
 import { message } from "antd";
+import { useSearchParams } from "react-router-dom";
 import Post from "../components/Post";
 
 const SearchPage = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [searchParams] = useSearchParams();
 
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) {
+  // Trigger search from query parameter on mount
+  useEffect(() => {
+    const query = searchParams.get("q");
+    if (query) {
+      setSearchQuery(query);
+      handleSearch(query);
+    }
+  }, [searchParams]);
+
+  const handleSearch = async (query = searchQuery) => {
+    if (!query.trim()) {
       message.error("Please enter a username to search");
+      setSearchResults([]);
       return;
     }
 
     setLoading(true);
     try {
-      const res = await fetch(`/api/posts/user/${searchQuery}`);
+      const res = await fetch(`/api/posts/user/${query}`);
       const data = await res.json();
-      if (data.error) {
-        message.error(data.error);
-        setSearchResults([]);
-        return;
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Failed to fetch posts");
       }
-      setSearchResults(data);
+      setSearchResults(Array.isArray(data) ? data : []);
     } catch (error) {
-      message.error(error.message);
+      message.error(error.message || "An unexpected error occurred");
       setSearchResults([]);
     } finally {
       setLoading(false);
@@ -64,6 +74,7 @@ const SearchPage = () => {
         >
           <TextField
             fullWidth
+            label="Search by username"
             placeholder="Enter username to search posts..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -75,22 +86,17 @@ const SearchPage = () => {
                 </InputAdornment>
               ),
             }}
+            aria-label="Search posts by username"
           />
           <Button
             variant="contained"
-            onClick={handleSearch}
+            onClick={() => handleSearch()}
             disabled={loading}
             sx={{ width: { xs: "100%", sm: "auto" } }}
           >
             {loading ? <CircularProgress size={24} /> : "Search"}
           </Button>
         </Box>
-
-        {loading && (
-          <Box display="flex" justifyContent="center" my={4}>
-            <CircularProgress />
-          </Box>
-        )}
 
         {!loading && searchResults.length === 0 && searchQuery && (
           <Typography textAlign="center" my={4}>

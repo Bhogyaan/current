@@ -1,10 +1,8 @@
-import { useEffect, useState, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
 import useShowToast from "../hooks/useShowToast";
 import { Box, Typography } from "@mui/material";
-import { Skeleton } from "antd";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useRecoilValue } from "recoil";
 import userAtom from "../atoms/userAtom";
 import { selectedConversationAtom } from "../atoms/messagesAtom";
@@ -16,91 +14,124 @@ const MessageContainer = ({ userId }) => {
   const selectedConversation = useRecoilValue(selectedConversationAtom);
   const { socket } = useSocket();
   const showToast = useShowToast();
-  const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [isTyping, setIsTyping] = useState(false);
   const [conversationId, setConversationId] = useState(null);
-  const [isValidating, setIsValidating] = useState(true);
   const messagesEndRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
+    });
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isTyping]);
+  }, [messages, isTyping, scrollToBottom]);
 
-  useEffect(() => {
-    if (!userId) {
-      showToast("Error", "No recipient selected", "error");
-      navigate("/chat");
-      setIsValidating(false);
+  const fetchMessages = useCallback(async () => {
+    if (!userId || typeof userId !== "string" || userId.trim() === "") {
+      console.warn("Invalid userId provided to MessageContainer:", userId);
+      setLoadingMessages(false);
       return;
     }
-    setIsValidating(false);
-  }, [userId, showToast, navigate]);
 
-  useEffect(() => {
-    if (isValidating || !userId) return;
-
-    const getMessages = async () => {
-      try {
-        setLoadingMessages(true);
-        const res = await fetch(`/api/messages/${userId}`, { credentials: "include" });
-        const data = await res.json();
-        if (data.error) {
-          showToast("Error", data.error, "error");
-          return;
-        }
-        setMessages(data);
-        if (data.length > 0) {
-          setConversationId(data[0].conversationId);
-        } else {
-          const convRes = await fetch(`/api/messages/conversations`, { credentials: "include" });
-          const convData = await convRes.json();
-          const conv = convData.find((c) => c.participants.some((p) => p._id === userId));
-          if (conv) setConversationId(conv._id);
-        }
-      } catch (error) {
-        showToast("Error", error.message, "error");
-      } finally {
-        setLoadingMessages(false);
+    try {
+      setLoadingMessages(true);
+      const res = await fetch(`/api/messages/${userId}`, {
+        credentials: "include",
+        headers: {
+          "Cache-Control": "no-cache",
+        },
+      });
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Failed to fetch messages: ${res.status} ${errorText}`);
       }
-    };
-
-    getMessages();
-  }, [userId, showToast, isValidating]);
+      
+      const data = await res.json();
+      if (data.error) {
+        showToast("Error", data.error, "error");
+        return;
+      }
+      
+      setMessages(data);
+      if (data.length > 0) {
+        setConversationId(data[0].conversationId);
+      } else {
+        const convRes = await fetch(`/api/messages/conversations`, {
+          credentials: "include",
+        });
+        if (!convRes.ok) {
+          const errorText = await convRes.text();
+          throw new Error(`Failed to fetch conversations: ${convRes.status} ${errorText}`);
+        }
+        const convData = await convRes.json();
+        const conv = convData.find((c) => c.participants.some((p) => p._id === userId));
+        if (conv) setConversationId(conv._id);
+      }
+    } catch (error) {
+      console.error("Fetch messages error:", error.message);
+      showToast("Error", error.message, "error");
+    } finally {
+      setLoadingMessages(false);
+    }
+  }, [userId, showToast]);
 
   useEffect(() => {
-    if (!socket) return;
+    fetchMessages();
+  }, [fetchMessages]);
+
+  useEffect(() => {
+    if (!socket || !selectedConversation._id) return;
+
+    socket.emit("joinConversation", { conversationId: selectedConversation._id });
 
     const handleNewMessage = (message) => {
       const isRelevantChat =
-        message.conversationId === conversationId ||
+        message.conversationId === selectedConversation._id ||
         (message.sender._id === userId && message.recipientId === currentUser._id) ||
         (message.sender._id === currentUser._id && message.recipientId === userId);
 
       if (isRelevantChat) {
         setMessages((prev) => {
-          if (prev.some((m) => m._id === message._id)) {
-            return prev.map((m) => (m._id === message._id ? { ...m, status: message.status } : m));
+          const existingIndex = prev.findIndex((m) => m._id === message._id);
+          if (existingIndex !== -1) {
+            const newMessages = [...prev];
+            newMessages[existingIndex] = {
+              ...newMessages[existingIndex],
+              ...message
+            };
+            return newMessages;
           }
-          return [...prev, { ...message, status: message.sender._id === currentUser._id ? "sent" : "received" }];
+          return [...prev, {
+            ...message,
+            status: message.sender._id === currentUser._id ? message.status || "sent" : "received"
+          }];
         });
+
         if (!conversationId) setConversationId(message.conversationId);
 
-        socket.emit("messageDelivered", {
-          messageId: message._id,
-          conversationId: message.conversationId,
-          recipientId: currentUser._id,
-        });
+        if (message.sender._id !== currentUser._id) {
+          socket.emit("messageDelivered", {
+            messageId: message._id,
+            conversationId: message.conversationId,
+            recipientId: currentUser._id,
+          });
+          socket.emit("markMessagesAsSeen", {
+            conversationId: message.conversationId,
+            userId: currentUser._id,
+          });
+        }
       }
     };
 
     const handleMessagesSeen = ({ conversationId: cid, seenMessages }) => {
-      if (cid === conversationId) {
+      if (cid === selectedConversation._id) {
         setMessages((prev) =>
           prev.map((msg) =>
             seenMessages.includes(msg._id.toString())
@@ -112,7 +143,7 @@ const MessageContainer = ({ userId }) => {
     };
 
     const handleMessageDelivered = ({ messageId, conversationId: cid }) => {
-      if (cid === conversationId) {
+      if (cid === selectedConversation._id) {
         setMessages((prev) =>
           prev.map((msg) =>
             msg._id === messageId ? { ...msg, status: "delivered" } : msg
@@ -122,14 +153,17 @@ const MessageContainer = ({ userId }) => {
     };
 
     const handleTyping = ({ conversationId: cid, userId: typingUserId }) => {
-      if (cid === conversationId && typingUserId !== currentUser._id) {
+      if (cid === selectedConversation._id && typingUserId !== currentUser._id) {
         setIsTyping(true);
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 3000);
       }
     };
 
     const handleStopTyping = ({ conversationId: cid, userId: typingUserId }) => {
-      if (cid === conversationId && typingUserId !== currentUser._id) {
+      if (cid === selectedConversation._id && typingUserId !== currentUser._id) {
         setIsTyping(false);
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       }
     };
 
@@ -139,8 +173,11 @@ const MessageContainer = ({ userId }) => {
     socket.on("typing", handleTyping);
     socket.on("stopTyping", handleStopTyping);
 
-    if (conversationId && selectedConversation._id === conversationId) {
-      socket.emit("markMessagesAsSeen", { conversationId, userId: currentUser._id });
+    if (selectedConversation._id && !selectedConversation.mock) {
+      socket.emit("markMessagesAsSeen", {
+        conversationId: selectedConversation._id,
+        userId: currentUser._id,
+      });
     }
 
     return () => {
@@ -149,26 +186,22 @@ const MessageContainer = ({ userId }) => {
       socket.off("messageDelivered", handleMessageDelivered);
       socket.off("typing", handleTyping);
       socket.off("stopTyping", handleStopTyping);
+      socket.emit("leaveConversation", { conversationId: selectedConversation._id });
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     };
-  }, [socket, userId, currentUser._id, conversationId, selectedConversation._id]);
+  }, [socket, userId, currentUser._id, selectedConversation._id, selectedConversation.mock, conversationId]);
 
   const dotVariants = {
     animate: {
-      y: [0, -8, 0],
-      transition: { duration: 0.6, repeat: Infinity, ease: "easeInOut" },
+      y: [0, -4, 0],
+      transition: { duration: 0.5, repeat: Infinity, ease: "easeInOut" },
     },
   };
 
-  if (isValidating || loadingMessages) {
+  if (loadingMessages) {
     return (
       <Box sx={{ flex: 1, display: "flex", justifyContent: "center", alignItems: "center" }}>
-        <Skeleton
-          active
-          animation="wave"
-          paragraph={{ rows: 6 }}
-          title={false}
-          sx={{ width: "100%", maxWidth: { xs: "100%", sm: "600px", md: "800px" } }}
-        />
+        <Typography variant="h6">Loading messages...</Typography>
       </Box>
     );
   }
@@ -180,47 +213,87 @@ const MessageContainer = ({ userId }) => {
         display: "flex",
         flexDirection: "column",
         gap: 1,
-        p: { xs: 1, sm: 2 },
+        p: { xs: 2, sm: 3 },
+        pb: { xs: 1, sm: 5 },
         overflowY: "auto",
-        bgcolor: "#1e1e1e",
-        borderRadius: { xs: 0, sm: "8px" },
+        overflowX: "hidden",
+        bgcolor: "transparent",
+        scrollBehavior: "smooth",
+        height: "calc(100vh - 120px)",
+        "&::-webkit-scrollbar": {
+          width: "6px",
+        },
+        "&::-webkit-scrollbar-thumb": {
+          backgroundColor: "#A9A9A9",
+          borderRadius: "3px",
+        },
+        "@supports (-moz-appearance:none)": {
+          scrollbarWidth: "thin",
+          scrollbarColor: "#A9A9A9 transparent",
+        },
       }}
     >
-      {messages.length === 0 && (
-        <Typography color="text.secondary" textAlign="center" sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {messages.length === 0 ? (
+        <Typography
+          color="text.secondary"
+          textAlign="center"
+          sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}
+        >
           No messages yet. Start the conversation!
         </Typography>
-      )}
-      {messages.map((message) => (
-        <Message
-          key={message._id}
-          message={message}
-          isOwnMessage={message.sender._id === currentUser._id}
-        />
-      ))}
-      {isTyping && (
-        <Box display="flex" alignItems="center" gap={1} mt={1} px={2}>
-          <motion.div
-            variants={dotVariants}
-            animate="animate"
-            style={{ width: 8, height: 8, backgroundColor: "#9b59b6", borderRadius: "50%" }}
-          />
-          <motion.div
-            variants={dotVariants}
-            animate="animate"
-            style={{ width: 8, height: 8, backgroundColor: "#9b59b6", borderRadius: "50%" }}
-            transition={{ delay: 0.2 }}
-          />
-          <motion.div
-            variants={dotVariants}
-            animate="animate"
-            style={{ width: 8, height: 8, backgroundColor: "#9b59b6", borderRadius: "50%" }}
-            transition={{ delay: 0.4 }}
-          />
-          <Typography variant="body2" color="text.secondary">
-            Typing...
-          </Typography>
-        </Box>
+      ) : (
+        <>
+          <AnimatePresence>
+            {messages.map((message) => (
+              <motion.div
+                key={message._id}
+                initial={{ opacity: 0, y: 20, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.3, ease: "easeOut" }}
+              >
+                <Message
+                  message={message}
+                  isOwnMessage={message.sender._id === currentUser._id}
+                />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          
+          {isTyping && (
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 0.5,
+                p: 1,
+                bgcolor: "#EDEDED",
+                borderRadius: 10,
+                maxWidth: 200,
+                mx: "auto",
+                mt: 2,
+              }}
+            >
+              <motion.div
+                variants={dotVariants}
+                animate="animate"
+                style={{ width: 6, height: 6, backgroundColor: "#075E54", borderRadius: "50%" }}
+              />
+              <motion.div
+                variants={dotVariants}
+                animate="animate"
+                style={{ width: 6, height: 6, backgroundColor: "#075E54", borderRadius: "50%" }}
+                transition={{ delay: 0.1 }}
+              />
+              <motion.div
+                variants={dotVariants}
+                animate="animate"
+                style={{ width: 6, height: 6, backgroundColor: "#075E54", borderRadius: "50%" }}
+                transition={{ delay: 0.2 }}
+              />
+            </Box>
+          )}
+        </>
       )}
       <div ref={messagesEndRef} />
     </Box>

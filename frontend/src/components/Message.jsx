@@ -14,20 +14,20 @@ const Message = ({ isOwnMessage, message }) => {
 
   const renderMedia = () => {
     if (!message.img) return null;
-
     const fileType = message.img.split(";")[0].split(":")[1] || "";
     if (fileType.includes("image")) {
       return (
         <Box
           component="img"
           src={message.img}
+          loading="lazy"
           alt="Message content"
           sx={{
             maxWidth: "100%",
-            maxHeight: { xs: "120px", sm: "150px", md: "200px" },
-            borderRadius: "12px",
+            maxHeight: { xs: "120px", sm: "150px" },
+            borderRadius: 5,
             display: mediaLoaded ? "block" : "none",
-            boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+            boxShadow: "0 2px 4px rgba(0, 0, 0, 0.5)",
           }}
           onLoad={() => setMediaLoaded(true)}
           onError={() => setMediaLoaded(true)}
@@ -41,9 +41,9 @@ const Message = ({ isOwnMessage, message }) => {
           controls
           sx={{
             maxWidth: "100%",
-            maxHeight: { xs: "120px", sm: "150px", md: "200px" },
-            borderRadius: "12px",
-            boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+            maxHeight: { xs: "120px", sm: "150px" },
+            borderRadius: 5,
+            boxShadow: "0 2px 4px rgba(0, 0, 0, 0.5)",
           }}
         />
       );
@@ -55,12 +55,7 @@ const Message = ({ isOwnMessage, message }) => {
           controls
           sx={{
             width: "100%",
-            "& audio": {
-              width: "100%",
-              height: "40px",
-              borderRadius: "12px",
-              bgcolor: "rgba(255, 255, 255, 0.1)",
-            },
+            "& audio": { width: "100%", height: "40px", borderRadius: 20, bgcolor: "#2e2e2e" },
           }}
         />
       );
@@ -68,20 +63,20 @@ const Message = ({ isOwnMessage, message }) => {
       return (
         <Typography
           variant="body2"
-          color="text.secondary"
+          color="#8515fe"
           sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
         >
-          Document: <a href={message.img} download style={{ color: "#9b59b6" }}>Download</a>
+          Document: <a href={message.img} download style={{ color: "#8515fe" }}>Download</a>
         </Typography>
       );
     }
     return (
       <Typography
         variant="body2"
-        color="text.secondary"
+        color="#8515fe"
         sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
       >
-        Unsupported media: <a href={message.img} download style={{ color: "#9b59b6" }}>Download</a>
+        Unsupported media: <a href={message.img} download style={{ color: "#8515fe" }}>Download</a>
       </Typography>
     );
   };
@@ -90,19 +85,19 @@ const Message = ({ isOwnMessage, message }) => {
     if (!isOwnMessage) return null;
     if (message.seen || message.status === "seen") {
       return (
-        <Box sx={{ position: "relative" }} title="Seen">
+        <Box sx={{ position: "relative" }} title="Seen" aria-label="Message seen">
           <BsCheck2All size={18} color="#4caf50" />
         </Box>
       );
     } else if (message.status === "delivered") {
       return (
-        <Box sx={{ position: "relative" }} title="Delivered">
+        <Box sx={{ position: "relative" }} title="Delivered" aria-label="Message delivered">
           <BsCheck2All size={18} color="#bdc3c7" />
         </Box>
       );
     }
     return (
-      <Box sx={{ position: "relative" }} title="Sent">
+      <Box sx={{ position: "relative" }} title="Sent" aria-label="Message sent">
         <BsCheck size={18} color="#bdc3c7" />
       </Box>
     );
@@ -114,25 +109,24 @@ const Message = ({ isOwnMessage, message }) => {
         display: "flex",
         flexDirection: isOwnMessage ? "row-reverse" : "row",
         alignItems: "flex-end",
-        mb: 1,
-        px: { xs: 1, sm: 2 },
+        p: 1,
       }}
     >
       {!isOwnMessage && (
         <Avatar
           src={selectedConversation.userProfilePic}
-          sx={{ width: { xs: 28, sm: 32 }, height: { xs: 28, sm: 32 }, mr: 1 }}
+          sx={{ width: 32, height: 32, mr: 1 }}
         />
       )}
       <Paper
         sx={{
-          p: { xs: 1, sm: 1.5 },
-          bgcolor: isOwnMessage ? "#9b59b6" : "rgba(255, 255, 255, 0.1)",
-          borderRadius: "12px",
-          border: "1px solid rgba(255, 255, 255, 0.2)",
-          backdropFilter: "blur(10px)",
-          maxWidth: { xs: "75%", sm: "70%", md: "60%" },
-          boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+          pr: 1.5,
+          pl: 1.5,
+          bgcolor: isOwnMessage ? "#8515fe" : "#2e2e2e",
+          color: isOwnMessage ? "white" : "#b0b0b0",
+          borderRadius: 3,
+          maxWidth: { xs: "75%", sm: "70%" },
+          boxShadow: "0 2px 4px rgba(0, 0, 0, 0.5)",
         }}
         component={motion.div}
         initial={{ opacity: 0, y: 5 }}
@@ -142,11 +136,7 @@ const Message = ({ isOwnMessage, message }) => {
         {message.text && (
           <Typography
             variant="body2"
-            sx={{
-              wordBreak: "break-word",
-              color: isOwnMessage ? "white" : "text.secondary",
-              fontSize: { xs: "0.875rem", sm: "0.9375rem" },
-            }}
+            sx={{ wordBreak: "break-word", fontSize: { xs: "0.875rem", sm: "0.9375rem" } }}
           >
             {message.text}
           </Typography>
@@ -158,8 +148,8 @@ const Message = ({ isOwnMessage, message }) => {
               <Skeleton
                 variant="rectangular"
                 width="100%"
-                height={{ xs: 120, sm: 150, md: 200 }}
-                sx={{ borderRadius: "12px", bgcolor: "rgba(255, 255, 255, 0.1)" }}
+                height={120}
+                sx={{ borderRadius: 5, bgcolor: "#444444" }}
               />
             )}
           </Box>
@@ -174,11 +164,8 @@ const Message = ({ isOwnMessage, message }) => {
         >
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{
-              mr: isOwnMessage ? 0.5 : 0,
-              fontSize: { xs: "0.75rem", sm: "0.8125rem" },
-            }}
+            color={isOwnMessage ? "white" : "#757575"}
+            sx={{ mr: isOwnMessage ? 0.5 : 0, fontSize: { xs: "0.75rem", sm: "0.8125rem" } }}
           >
             {format(new Date(message.createdAt), "h:mm a")}
           </Typography>

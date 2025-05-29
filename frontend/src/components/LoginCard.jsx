@@ -48,7 +48,7 @@ export default function LoginCard({ isAdmin = false }) {
         return;
       }
 
-      localStorage.setItem('user-threads', JSON.stringify(data));
+      localStorage.setItem('user-NRBLOG', JSON.stringify(data));
       setUser(data);
       showToast('Success', `Logged in as ${isAdmin ? 'admin' : 'user'} successfully`, 'success');
       navigate(isAdmin ? '/admin-dashboard' : '/dashboard');
