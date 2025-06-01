@@ -39,8 +39,7 @@ import {
 } from "react-icons/bs";
 import CommentItem from "./CommentItem";
 import { SocketContext } from "../context/SocketContext";
-import { debounce } from "lodash";
-import { ThumbUp, Comment, Bookmark } from "@mui/icons-material";
+import { ThumbUp, Comment as CommentIcon, Bookmark } from "@mui/icons-material";
 
 const Post = ({ post, postedBy }) => {
   const [user, setUser] = useState(null);
@@ -87,91 +86,89 @@ const Post = ({ post, postedBy }) => {
     }
   }, [post?._id, setPosts]);
 
-  const debouncedUpdateComments = debounce((postId, updatedComments) => {
-    setPosts((prev) => ({
-      ...prev,
-      posts: prev.posts.map((p) =>
-        p._id === postId ? { ...p, comments: updatedComments } : p
-      ),
-    }));
-  }, 300);
-
   useEffect(() => {
     if (socket && post?._id) {
       socket.emit("joinPost", post._id);
 
-      socket.on("newComment", ({ postId, comment, post: updatedPost }) => {
-        if (postId === post._id && updatedPost) {
-          debouncedUpdateComments(postId, updatedPost.comments);
-          fetchComments();
-        }
-      });
-
-      socket.on("likeUnlikeComment", ({ postId, commentId, userId, likes, post: updatedPost }) => {
-        if (postId === post._id && updatedPost) {
-          debouncedUpdateComments(postId, updatedPost.comments);
-          fetchComments();
-        }
-      });
-
-      socket.on("editComment", ({ postId, commentId, text, post: updatedPost }) => {
-        if (postId === post._id && updatedPost) {
-          debouncedUpdateComments(postId, updatedPost.comments);
-          fetchComments();
-        }
-      });
-
-      socket.on("deleteComment", ({ postId, commentId, post: updatedPost }) => {
-        if (postId === post._id && updatedPost) {
-          debouncedUpdateComments(postId, updatedPost.comments);
-          fetchComments();
-        }
-      });
-
-      socket.on("postDeleted", ({ postId }) => {
-        if (postId === post._id) {
-          message.info("Post has been deleted");
-          setPosts((prev) => ({
-            ...prev,
-            posts: prev.posts.filter((p) => p._id !== postId),
-          }));
-        }
-      });
-
-      socket.on("postBanned", ({ postId, post: updatedPost }) => {
+      const handleNewComment = ({ postId, comment }) => {
         if (postId === post._id) {
           setPosts((prev) => ({
             ...prev,
             posts: prev.posts.map((p) =>
-              p._id === postId ? { ...p, isBanned: true } : p
+              p._id === postId ? { ...p, comments: [...(p.comments || []), comment] } : p
             ),
           }));
         }
-      });
+      };
 
-      socket.on("postUnbanned", ({ postId, post: updatedPost }) => {
+      const handleCommentLike = ({ postId, commentId, likes }) => {
         if (postId === post._id) {
           setPosts((prev) => ({
             ...prev,
             posts: prev.posts.map((p) =>
-              p._id === postId ? { ...p, isBanned: false } : p
+              p._id === postId
+                ? {
+                    ...p,
+                    comments: p.comments.map((c) =>
+                      c._id === commentId ? { ...c, likes } : c
+                    ),
+                  }
+                : p
             ),
           }));
         }
-      });
+      };
+
+      const handleCommentUpdate = ({ postId, commentId, text, isEdited }) => {
+        if (postId === post._id) {
+          setPosts((prev) => ({
+            ...prev,
+            posts: prev.posts.map((p) =>
+              p._id === postId
+                ? {
+                    ...p,
+                    comments: p.comments.map((c) =>
+                      c._id === commentId
+                        ? { ...c, text, isEdited, updatedAt: new Date() }
+                        : c
+                    ),
+                  }
+                : p
+            ),
+          }));
+        }
+      };
+
+      const handleCommentDelete = ({ postId, commentId }) => {
+        if (postId === post._id) {
+          setPosts((prev) => ({
+            ...prev,
+            posts: prev.posts.map((p) =>
+              p._id === postId
+                ? {
+                    ...p,
+                    comments: p.comments.filter((c) => c._id !== commentId),
+                  }
+                : p
+            ),
+          }));
+        }
+      };
+
+      socket.on("commentAdded", handleNewComment);
+      socket.on("commentLiked", handleCommentLike);
+      socket.on("commentUpdated", handleCommentUpdate);
+      socket.on("commentDeleted", handleCommentDelete);
 
       return () => {
         socket.emit("leavePost", post._id);
-        socket.off("newComment");
-        socket.off("likeUnlikeComment");
-        socket.off("editComment");
-        socket.off("deleteComment");
-        socket.off("postDeleted");
-        socket.off("postBanned");
-        socket.off("postUnbanned");
+        socket.off("commentAdded", handleNewComment);
+        socket.off("commentLiked", handleCommentLike);
+        socket.off("commentUpdated", handleCommentUpdate);
+        socket.off("commentDeleted", handleCommentDelete);
       };
     }
-  }, [socket, post?._id, setPosts, fetchComments]);
+  }, [socket, post?._id, setPosts]);
 
   const fetchUserData = useCallback(async () => {
     try {
@@ -306,6 +303,91 @@ const Post = ({ post, postedBy }) => {
     }
   };
 
+  const handleLikeComment = async (commentId) => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+      
+      const res = await fetch(`/api/posts/${post._id}/comment/${commentId}/like`, {
+        method: "PUT",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}` 
+        },
+        credentials: "include",
+      });
+      
+      const data = await res.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      return data.likes;
+    } catch (error) {
+      console.error("Like comment error:", error);
+      throw error;
+    }
+  };
+
+  const handleEditComment = async (commentId, text) => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+      
+      const res = await fetch(`/api/posts/${post._id}/comment/${commentId}`, {
+        method: "PUT",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}` 
+        },
+        body: JSON.stringify({ text }),
+        credentials: "include",
+      });
+      
+      const data = await res.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      return data;
+    } catch (error) {
+      console.error("Edit comment error:", error);
+      throw error;
+    }
+  };
+
+  const handleDeleteComment = async (commentId) => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+      
+      const res = await fetch(`/api/posts/${post._id}/comment/${commentId}`, {
+        method: "DELETE",
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}` 
+        },
+        credentials: "include",
+      });
+      
+      const data = await res.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      return data;
+    } catch (error) {
+      console.error("Delete comment error:", error);
+      throw error;
+    }
+  };
+
   const handleMoreClick = (event) => {
     setAnchorEl(event.currentTarget);
   };
@@ -337,44 +419,8 @@ const Post = ({ post, postedBy }) => {
       }
       setNewComment("");
       message.success("Comment added");
-      await fetchComments();
-      if (socket) {
-        socket.emit("newComment", { postId: post._id, comment: data, userId: currentUser._id });
-      }
     } catch (error) {
       message.error(error.message || "Failed to add comment");
-    }
-  };
-
-  const handleLikeComment = async (commentId) => {
-    try {
-      const token = localStorage.getItem("token");
-      if (!token) {
-        message.error("No authentication token found");
-        return;
-      }
-      const res = await fetch(`/api/posts/${post._id}/comment/${commentId}/like`, {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${token}` },
-        credentials: "include",
-      });
-      const data = await res.json();
-      if (data.error) {
-        message.error(data.error);
-        return;
-      }
-      message.success(data.likes.includes(currentUser._id) ? "Comment liked" : "Comment unliked");
-      await fetchComments();
-      if (socket) {
-        socket.emit("likeUnlikeComment", {
-          postId: post._id,
-          commentId,
-          userId: currentUser._id,
-          likes: data.likes,
-        });
-      }
-    } catch (error) {
-      message.error(error.message || "Failed to like/unlike comment");
     }
   };
 
@@ -665,7 +711,7 @@ const Post = ({ post, postedBy }) => {
                 <ThumbUp sx={{ fontSize: 16, mr: 0.5 }} /> {post.likes?.length || 0}
               </Typography>
               <Typography variant="caption" sx={{ display: "flex", alignItems: "center" }}>
-                <Comment sx={{ fontSize: 16, mr: 0.5 }} /> {post.comments?.length || 0}
+                <CommentIcon sx={{ fontSize: 16, mr: 0.5 }} /> {post.comments?.length || 0}
               </Typography>
               <Typography variant="caption" sx={{ display: "flex", alignItems: "center" }}>
                 <Bookmark sx={{ fontSize: 16, mr: 0.5 }} /> {post.bookmarks?.length || 0}
@@ -791,7 +837,9 @@ const Post = ({ post, postedBy }) => {
                   currentUser={currentUser}
                   postId={post._id}
                   postPostedBy={post.postedBy?._id?.toString() || post.postedBy}
-                  onLike={() => handleLikeComment(comment._id)}
+                  onLike={handleLikeComment}
+                  onEdit={handleEditComment}
+                  onDelete={handleDeleteComment}
                   fetchComments={fetchComments}
                 />
               ))

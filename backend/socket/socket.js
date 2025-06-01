@@ -4,12 +4,13 @@ import express from "express";
 import Message from "../models/messageModel.js";
 import Conversation from "../models/conversationModel.js";
 import User from "../models/userModel.js";
+import {Post} from "../models/postModel.js";
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: ["http://localhost:3000", "https://your-production-domain.com"],
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -17,6 +18,9 @@ const io = new Server(server, {
   reconnectionAttempts: 10,
   reconnectionDelay: 1000,
   reconnectionDelayMax: 5000,
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ["websocket", "polling"],
 });
 
 app.use((req, res, next) => {
@@ -27,6 +31,7 @@ app.use((req, res, next) => {
 
 const userSocketMap = {};
 const typingUsers = new Map();
+const postRooms = new Map();
 
 export const getRecipientSocketId = (recipientId) => {
   return userSocketMap[recipientId];
@@ -46,6 +51,32 @@ io.on("connection", (socket) => {
     return;
   }
 
+  // Post room management
+  socket.on("joinPost", (postId) => {
+    if (postId) {
+      socket.join(`post:${postId}`);
+      if (!postRooms.has(postId)) {
+        postRooms.set(postId, new Set());
+      }
+      postRooms.get(postId).add(socket.id);
+      console.log(`User ${userId} joined post room: post:${postId}`);
+    }
+  });
+
+  socket.on("leavePost", (postId) => {
+    if (postId) {
+      socket.leave(`post:${postId}`);
+      if (postRooms.has(postId)) {
+        postRooms.get(postId).delete(socket.id);
+        if (postRooms.get(postId).size === 0) {
+          postRooms.delete(postId);
+        }
+      }
+      console.log(`User ${userId} left post room: post:${postId}`);
+    }
+  });
+
+  // Conversation handlers (keep existing)
   socket.on("messageDelivered", async ({ messageId, conversationId, recipientId }) => {
     try {
       if (!messageId || !conversationId || !recipientId) return;
@@ -200,6 +231,17 @@ io.on("connection", (socket) => {
       delete userSocketMap[userId];
       io.emit("getOnlineUsers", Object.keys(userSocketMap));
       
+      // Clean up post rooms
+      postRooms.forEach((sockets, postId) => {
+        if (sockets.has(socket.id)) {
+          sockets.delete(socket.id);
+          if (sockets.size === 0) {
+            postRooms.delete(postId);
+          }
+        }
+      });
+
+      // Clean up typing indicators
       typingUsers.forEach((conversationTyping, conversationId) => {
         if (conversationTyping.has(userId)) {
           conversationTyping.delete(userId);
@@ -225,6 +267,10 @@ io.on("connection", (socket) => {
 
   socket.on("reconnect_error", (error) => {
     console.error("Socket reconnection error:", error.message);
+  });
+
+  socket.on("reconnect_failed", () => {
+    console.error("Socket reconnection failed");
   });
 });
 

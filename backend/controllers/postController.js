@@ -503,6 +503,8 @@ const bookmarkUnbookmarkPost = async (req, res) => {
 //   }
 // };
 
+// ... (keep all other imports and functions the same)
+
 const commentOnPost = async (req, res) => {
   try {
     if (!req.user) {
@@ -547,11 +549,10 @@ const commentOnPost = async (req, res) => {
     const newComment = populatedPost.comments[populatedPost.comments.length - 1];
 
     if (req.io) {
-      req.io.to(`post:${postId}`).emit("newComment", {
+      req.io.to(`post:${postId}`).emit("commentAdded", {
         postId,
         comment: newComment,
         post: populatedPost,
-        timestamp: Date.now(),
       });
     }
 
@@ -600,12 +601,12 @@ const editComment = async (req, res) => {
       .populate("comments.userId", "username profilePic");
 
     if (req.io) {
-      req.io.to(`post:${postId}`).emit("editComment", {
+      req.io.to(`post:${postId}`).emit("commentUpdated", {
         postId,
         commentId,
-        comment,
+        text: comment.text,
+        isEdited: true,
         post: populatedPost,
-        timestamp: Date.now(),
       });
     }
 
@@ -647,11 +648,10 @@ const deleteComment = async (req, res) => {
       .populate("comments.userId", "username profilePic");
 
     if (req.io) {
-      req.io.to(`post:${postId}`).emit("deleteComment", {
+      req.io.to(`post:${postId}`).emit("commentDeleted", {
         postId,
         commentId,
         post: populatedPost,
-        timestamp: Date.now(),
       });
     }
 
@@ -694,13 +694,12 @@ const likeUnlikeComment = async (req, res) => {
       .populate("comments.userId", "username profilePic");
 
     if (req.io) {
-      req.io.to(`post:${postId}`).emit("likeUnlikeComment", {
+      req.io.to(`post:${postId}`).emit("commentLiked", {
         postId,
         commentId,
         userId,
         likes: comment.likes,
         post: populatedPost,
-        timestamp: Date.now(),
       });
     }
 
@@ -710,6 +709,8 @@ const likeUnlikeComment = async (req, res) => {
     res.status(500).json({ error: `Failed to like/unlike comment: ${err.message}` });
   }
 };
+
+// ... (keep all other exports the same)
 
 // postController.js (updated ban/unban functions)
 const banPost = async (req, res) => {
