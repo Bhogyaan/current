@@ -160,14 +160,14 @@ const AdminHomepage = () => {
       }
     };
 
-    const handleCommentLike = ({ postId, commentId, userId, likes, post: updatedPost }) => {
+    const handleCommentLike = ({ postId, commentId, likes, post: updatedPost }) => {
       if (updatedPost) {
         debouncedUpdateComments(postId, updatedPost.comments);
         fetchComments(postId);
       }
     };
 
-    const handleCommentEdit = ({ postId, commentId, text, post: updatedPost }) => {
+    const handleCommentEdit = ({ postId, commentId, text, isEdited, post: updatedPost }) => {
       if (updatedPost) {
         debouncedUpdateComments(postId, updatedPost.comments);
         fetchComments(postId);
@@ -185,18 +185,18 @@ const AdminHomepage = () => {
     socket.on("postStatusUpdate", handlePostStatusUpdate);
     socket.on("postDeleted", handlePostDeleted);
     socket.on("newComment", handleNewComment);
-    socket.on("likeUnlikeComment", handleCommentLike);
-    socket.on("editComment", handleCommentEdit);
-    socket.on("deleteComment", handleCommentDelete);
+    socket.on("commentLiked", handleCommentLike);
+    socket.on("commentUpdated", handleCommentEdit);
+    socket.on("commentDeleted", handleCommentDelete);
 
     return () => {
       socket.off("newPost", handleNewPost);
       socket.off("postStatusUpdate", handlePostStatusUpdate);
       socket.off("postDeleted", handlePostDeleted);
       socket.off("newComment", handleNewComment);
-      socket.off("likeUnlikeComment", handleCommentLike);
-      socket.off("editComment", handleCommentEdit);
-      socket.off("deleteComment", handleCommentDelete);
+      socket.off("commentLiked", handleCommentLike);
+      socket.off("commentUpdated", handleCommentEdit);
+      socket.off("commentDeleted", handleCommentDelete);
     };
   }, [socket, fetchComments, setPosts, debouncedUpdateComments]);
 
@@ -302,7 +302,7 @@ const AdminHomepage = () => {
       message.success(data.likes.includes(currentUser._id) ? "Comment liked" : "Comment unliked");
       await fetchComments(postId);
       if (socket) {
-        socket.emit("likeUnlikeComment", {
+        socket.emit("commentLiked", {
           postId,
           commentId,
           userId: currentUser._id,

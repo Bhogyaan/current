@@ -503,8 +503,7 @@ const bookmarkUnbookmarkPost = async (req, res) => {
 //   }
 // };
 
-// ... (keep all other imports and functions the same)
-
+// Update the comment-related controller functions
 const commentOnPost = async (req, res) => {
   try {
     if (!req.user) {
@@ -563,6 +562,84 @@ const commentOnPost = async (req, res) => {
   }
 };
 
+// Updated commentOnPost function
+// const commentOnPost = async (req, res) => {
+//   try {
+//     if (!req.user) {
+//       return res.status(401).json({ error: "Authentication required" });
+//     }
+
+//     const { postId } = req.params;
+//     const { text } = req.body;
+//     const userId = req.user._id;
+
+//     if (!text || !text.trim()) {
+//       return res.status(400).json({ error: "Comment text is required" });
+//     }
+
+//     if (text.length > 500) {
+//       return res.status(400).json({ error: "Comment must be less than 500 characters" });
+//     }
+
+//     const post = await Post.findById(postId);
+//     if (!post) {
+//       return res.status(404).json({ error: "Post not found" });
+//     }
+
+//     if (post.isBanned && !req.user.isAdmin) {
+//       return res.status(403).json({ error: "Cannot comment on banned post" });
+//     }
+
+//     const user = await User.findById(userId).select("username profilePic");
+//     if (!user) {
+//       return res.status(404).json({ error: "User not found" });
+//     }
+
+//     const comment = {
+//       userId,
+//       text: sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} }),
+//       username: user.username,
+//       userProfilePic: user.profilePic,
+//       createdAt: new Date(),
+//       likes: [],
+//       isEdited: false,
+//     };
+
+//     post.comments.push(comment);
+//     await post.save();
+
+//     const populatedPost = await Post.findById(post._id)
+//       .populate("postedBy", "username profilePic")
+//       .populate("comments.userId", "username profilePic");
+
+//     const newComment = populatedPost.comments.find(c => 
+//       c._id.toString() === comment._id.toString()
+//     );
+
+//     if (req.io) {
+//       req.io.to(`post:${postId}`).emit("commentAdded", {
+//         postId,
+//         comment: newComment,
+//         totalComments: post.comments.length
+//       });
+//     }
+
+//     res.status(201).json({
+//       comment: newComment,
+//       totalComments: post.comments.length,
+//       message: "Comment added successfully"
+//     });
+//   } catch (err) {
+//     console.error("commentOnPost: Error", { 
+//       message: err.message, 
+//       stack: err.stack, 
+//       postId: req.params.postId 
+//     });
+//     res.status(500).json({ error: "Failed to add comment" });
+//   }
+// };
+
+// Updated editComment function
 const editComment = async (req, res) => {
   try {
     if (!req.user) {
@@ -571,6 +648,76 @@ const editComment = async (req, res) => {
 
     const { postId, commentId } = req.params;
     const { text } = req.body;
+    const userId = req.user._id;
+
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: "Comment text cannot be empty" });
+    }
+
+    if (text.length > 500) {
+      return res.status(400).json({ error: "Comment must be less than 500 characters" });
+    }
+
+    const post = await Post.findById(postId);
+    if (!post) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const comment = post.comments.id(commentId);
+    if (!comment) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+
+    // Check permissions: comment owner or admin
+    if (comment.userId.toString() !== userId.toString() && !req.user.isAdmin) {
+      return res.status(403).json({ error: "Unauthorized to edit this comment" });
+    }
+
+    const sanitizedText = sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} });
+    comment.text = sanitizedText;
+    comment.isEdited = true;
+    comment.updatedAt = new Date();
+    
+    await post.save();
+
+    const populatedPost = await Post.findById(postId)
+      .populate("postedBy", "username profilePic")
+      .populate("comments.userId", "username profilePic");
+
+    if (req.io) {
+      req.io.to(`post:${postId}`).emit("commentUpdated", {
+        postId,
+        commentId,
+        text: sanitizedText,
+        isEdited: true,
+        updatedAt: comment.updatedAt,
+        userId: comment.userId
+      });
+    }
+
+    res.status(200).json({
+      comment: comment,
+      message: "Comment updated successfully"
+    });
+  } catch (err) {
+    console.error("editComment: Error", { 
+      message: err.message, 
+      stack: err.stack, 
+      postId: req.params.postId, 
+      commentId: req.params.commentId 
+    });
+    res.status(500).json({ error: "Failed to edit comment" });
+  }
+};
+
+// Updated deleteComment function
+const deleteComment = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { postId, commentId } = req.params;
     const userId = req.user._id;
 
     const post = await Post.findById(postId);
@@ -583,85 +730,43 @@ const editComment = async (req, res) => {
       return res.status(404).json({ error: "Comment not found" });
     }
 
-    if (comment.userId.toString() !== userId.toString() && !req.user.isAdmin) {
-      return res.status(403).json({ error: "Unauthorized to edit this comment" });
-    }
+    // Check permissions: comment owner, post owner, or admin
+    const isCommentOwner = comment.userId.toString() === userId.toString();
+    const isPostOwner = post.postedBy.toString() === userId.toString();
+    const isAdmin = req.user.isAdmin;
 
-    if (!text || !text.trim()) {
-      return res.status(400).json({ error: "Comment text cannot be empty" });
-    }
-
-    comment.text = sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} });
-    comment.isEdited = true;
-    comment.updatedAt = new Date();
-    await post.save();
-
-    const populatedPost = await Post.findById(postId)
-      .populate("postedBy", "username profilePic")
-      .populate("comments.userId", "username profilePic");
-
-    if (req.io) {
-      req.io.to(`post:${postId}`).emit("commentUpdated", {
-        postId,
-        commentId,
-        text: comment.text,
-        isEdited: true,
-        post: populatedPost,
-      });
-    }
-
-    res.status(200).json({ comment, post: populatedPost });
-  } catch (err) {
-    console.error("editComment: Error", { message: err.message, stack: err.stack, postId: req.params.postId, commentId: req.params.commentId });
-    res.status(500).json({ error: `Failed to edit comment: ${err.message}` });
-  }
-};
-
-const deleteComment = async (req, res) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    const { postId, commentId } = req.params;
-    const userId = req.user._id;
-
-    const post = await Post.findById(postId);
-    if (!post || post.isBanned) {
-      return res.status(404).json({ error: "Post not found or banned" });
-    }
-
-    const comment = post.comments.id(commentId);
-    if (!comment) {
-      return res.status(404).json({ error: "Comment not found" });
-    }
-
-    if (comment.userId.toString() !== userId.toString() && userId.toString() !== post.postedBy.toString() && !req.user.isAdmin) {
+    if (!isCommentOwner && !isPostOwner && !isAdmin) {
       return res.status(403).json({ error: "Unauthorized to delete this comment" });
     }
 
     post.comments.pull({ _id: commentId });
     await post.save();
 
-    const populatedPost = await Post.findById(postId)
-      .populate("postedBy", "username profilePic")
-      .populate("comments.userId", "username profilePic");
-
     if (req.io) {
       req.io.to(`post:${postId}`).emit("commentDeleted", {
         postId,
         commentId,
-        post: populatedPost,
+        totalComments: post.comments.length,
+        deletedBy: userId
       });
     }
 
-    res.status(200).json({ message: "Comment deleted successfully", post: populatedPost });
+    res.status(200).json({ 
+      message: "Comment deleted successfully",
+      totalComments: post.comments.length
+    });
   } catch (err) {
-    console.error("deleteComment: Error", { message: err.message, stack: err.stack, postId: req.params.postId, commentId: req.params.commentId });
-    res.status(500).json({ error: `Failed to delete comment: ${err.message}` });
+    console.error("deleteComment: Error", { 
+      message: err.message, 
+      stack: err.stack, 
+      postId: req.params.postId, 
+      commentId: req.params.commentId 
+    });
+    res.status(500).json({ error: "Failed to delete comment" });
   }
 };
 
+// Updated likeUnlikeComment function
 const likeUnlikeComment = async (req, res) => {
   try {
     if (!req.user) {
@@ -672,8 +777,8 @@ const likeUnlikeComment = async (req, res) => {
     const userId = req.user._id;
 
     const post = await Post.findById(postId);
-    if (!post || post.isBanned) {
-      return res.status(404).json({ error: "Post not found or banned" });
+    if (!post) {
+      return res.status(404).json({ error: "Post not found" });
     }
 
     const comment = post.comments.id(commentId);
@@ -685,8 +790,9 @@ const likeUnlikeComment = async (req, res) => {
     if (userLikedComment) {
       comment.likes.pull(userId);
     } else {
-      comment.likes = [...new Set([...comment.likes, userId])];
+      comment.likes.push(userId);
     }
+
     await post.save();
 
     const populatedPost = await Post.findById(postId)
@@ -697,22 +803,29 @@ const likeUnlikeComment = async (req, res) => {
       req.io.to(`post:${postId}`).emit("commentLiked", {
         postId,
         commentId,
-        userId,
         likes: comment.likes,
-        post: populatedPost,
+        totalLikes: comment.likes.length,
+        likedBy: userId,
+        action: userLikedComment ? "unliked" : "liked"
       });
     }
 
-    res.status(200).json({ likes: comment.likes, post: populatedPost });
+    res.status(200).json({ 
+      likes: comment.likes,
+      totalLikes: comment.likes.length,
+      action: userLikedComment ? "unliked" : "liked"
+    });
   } catch (err) {
-    console.error("likeUnlikeComment: Error", { message: err.message, stack: err.stack, postId: req.params.postId, commentId: req.params.commentId });
-    res.status(500).json({ error: `Failed to like/unlike comment: ${err.message}` });
+    console.error("likeUnlikeComment: Error", { 
+      message: err.message, 
+      stack: err.stack, 
+      postId: req.params.postId, 
+      commentId: req.params.commentId 
+    });
+    res.status(500).json({ error: "Failed to like/unlike comment" });
   }
 };
 
-// ... (keep all other exports the same)
-
-// postController.js (updated ban/unban functions)
 const banPost = async (req, res) => {
   try {
     if (!req.user || !req.user.isAdmin) {

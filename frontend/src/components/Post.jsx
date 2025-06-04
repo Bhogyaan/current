@@ -252,9 +252,9 @@ const Post = ({ post, postedBy }) => {
       const token = localStorage.getItem("token");
       const res = await fetch(`/api/posts/${post._id}/ban`, {
         method: "PUT",
-        headers: { 
+        headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}` 
+          Authorization: `Bearer ${token}`
         },
         credentials: "include",
       });
@@ -280,9 +280,9 @@ const Post = ({ post, postedBy }) => {
       const token = localStorage.getItem("token");
       const res = await fetch(`/api/posts/${post._id}/unban`, {
         method: "PUT",
-        headers: { 
+        headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}` 
+          Authorization: `Bearer ${token}`
         },
         credentials: "include",
       });
@@ -306,24 +306,18 @@ const Post = ({ post, postedBy }) => {
   const handleLikeComment = async (commentId) => {
     try {
       const token = localStorage.getItem("token");
-      if (!token) {
-        throw new Error("No authentication token found");
-      }
-      
       const res = await fetch(`/api/posts/${post._id}/comment/${commentId}/like`, {
         method: "PUT",
-        headers: { 
+        headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}` 
+          "Authorization": `Bearer ${token}`
         },
         credentials: "include",
       });
-      
+
       const data = await res.json();
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      
+      if (!res.ok) throw new Error(data.error || "Failed to like comment");
+
       return data.likes;
     } catch (error) {
       console.error("Like comment error:", error);
@@ -334,25 +328,19 @@ const Post = ({ post, postedBy }) => {
   const handleEditComment = async (commentId, text) => {
     try {
       const token = localStorage.getItem("token");
-      if (!token) {
-        throw new Error("No authentication token found");
-      }
-      
       const res = await fetch(`/api/posts/${post._id}/comment/${commentId}`, {
         method: "PUT",
-        headers: { 
+        headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}` 
+          "Authorization": `Bearer ${token}`
         },
         body: JSON.stringify({ text }),
         credentials: "include",
       });
-      
+
       const data = await res.json();
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      
+      if (!res.ok) throw new Error(data.error || "Failed to edit comment");
+
       return data;
     } catch (error) {
       console.error("Edit comment error:", error);
@@ -363,24 +351,18 @@ const Post = ({ post, postedBy }) => {
   const handleDeleteComment = async (commentId) => {
     try {
       const token = localStorage.getItem("token");
-      if (!token) {
-        throw new Error("No authentication token found");
-      }
-      
       const res = await fetch(`/api/posts/${post._id}/comment/${commentId}`, {
         method: "DELETE",
-        headers: { 
+        headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}` 
+          "Authorization": `Bearer ${token}`
         },
         credentials: "include",
       });
-      
+
       const data = await res.json();
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      
+      if (!res.ok) throw new Error(data.error || "Failed to delete comment");
+
       return data;
     } catch (error) {
       console.error("Delete comment error:", error);

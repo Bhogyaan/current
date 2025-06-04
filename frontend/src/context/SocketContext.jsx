@@ -82,6 +82,22 @@ export const SocketContextProvider = ({ children }) => {
       }
     });
 
+     socketInstance.on("commentAdded", (data) => {
+    console.log("New comment received:", data);
+  });
+
+  socketInstance.on("commentUpdated", (data) => {
+    console.log("Comment updated:", data);
+  });
+
+  socketInstance.on("commentDeleted", (data) => {
+    console.log("Comment deleted:", data);
+  });
+
+  socketInstance.on("commentLiked", (data) => {
+    console.log("Comment liked:", data);
+  });
+
     const pingInterval = setInterval(() => {
       if (socketInstance.connected) {
         socketInstance.emit("ping");

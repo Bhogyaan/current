@@ -117,6 +117,27 @@ const PostPage = () => {
       }
     });
 
+    socket.on("commentLiked", ({ postId, commentId, likes, post }) => {
+      if (postId === pid) {
+        debouncedUpdatePost(postId, post);
+        fetchComments();
+      }
+    });
+
+    socket.on("commentUpdated", ({ postId, commentId, text, isEdited, post }) => {
+      if (postId === pid) {
+        debouncedUpdatePost(postId, post);
+        fetchComments();
+      }
+    });
+
+    socket.on("commentDeleted", ({ postId, commentId, post }) => {
+      if (postId === pid) {
+        debouncedUpdatePost(postId, post);
+        fetchComments();
+      }
+    });
+
     return () => {
       socket.emit("leavePostRoom", pid);
       socket.off("newComment", handleNewComment);
@@ -125,6 +146,9 @@ const PostPage = () => {
       socket.off("editComment");
       socket.off("deleteComment");
       socket.off("postDeleted");
+      socket.off("commentLiked");
+      socket.off("commentUpdated");
+      socket.off("commentDeleted");
     };
   }, [socket, pid, setPosts, navigate, user]);
 
