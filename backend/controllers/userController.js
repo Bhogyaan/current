@@ -5,10 +5,34 @@ import generateTokenAndSetCookie from "../utils/helpers/generateTokenAndSetCooki
 import { v2 as cloudinary } from "cloudinary";
 import mongoose from "mongoose";
 import fs from "fs";
+import jwt from "jsonwebtoken";
 
 const ADMIN_USERNAME = "adminblog";
 const ADMIN_PASSWORD = "Admin123";
 
+// Refresh Token Endpoint
+const refreshToken = async (req, res) => {
+  try {
+    const token = req.cookies.jwt;
+    if (!token) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId).select("-password");
+    if (!user) {
+      return res.status(401).json({ error: "User not found" });
+    }
+
+    const newToken = generateTokenAndSetCookie(user._id, res);
+    res.status(200).json({ token: newToken });
+  } catch (error) {
+    console.error("Error in refreshToken:", error.message);
+    res.status(401).json({ error: "Invalid or expired token" });
+  }
+};
+
+// Get User Profile
 const getUserProfile = async (req, res) => {
   try {
     const { query } = req.params;
@@ -43,6 +67,7 @@ const getUserProfile = async (req, res) => {
   }
 };
 
+// Get Multiple Users
 const getMultipleUsers = async (req, res) => {
   try {
     const { ids } = req.body;
@@ -60,8 +85,7 @@ const getMultipleUsers = async (req, res) => {
   }
 };
 
-
-
+// Get User Stats
 const getUserStats = async (req, res) => {
   try {
     const { username } = req.params;
@@ -94,6 +118,7 @@ const getUserStats = async (req, res) => {
   }
 };
 
+// Signup User
 const signupUser = async (req, res) => {
   try {
     const { name, email, username, password } = req.body;
@@ -147,6 +172,7 @@ const signupUser = async (req, res) => {
   }
 };
 
+// Login User
 const loginUser = async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -182,6 +208,7 @@ const loginUser = async (req, res) => {
   }
 };
 
+// Admin Login
 const adminLogin = async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -218,6 +245,7 @@ const adminLogin = async (req, res) => {
   }
 };
 
+// Promote to Admin
 const promoteToAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -246,6 +274,7 @@ const promoteToAdmin = async (req, res) => {
   }
 };
 
+// Logout User
 const logoutUser = (req, res) => {
   try {
     res.cookie("jwt", "", { maxAge: 1 });
@@ -256,7 +285,7 @@ const logoutUser = (req, res) => {
   }
 };
 
-
+// Follow/Unfollow User
 const followUnFollowUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -296,17 +325,14 @@ const followUnFollowUser = async (req, res) => {
             name: currentUser.name,
           },
         };
-        // Emit to the unfollowed user
         const unfollowedSocketId = req.io.getRecipientSocketId(id);
         if (unfollowedSocketId) {
           req.io.to(unfollowedSocketId).emit("userUnfollowed", unfollowData);
         }
-        // Emit to the current user
         const currentUserSocketId = req.io.getRecipientSocketId(currentUserId.toString());
         if (currentUserSocketId) {
           req.io.to(currentUserSocketId).emit("userUnfollowed", unfollowData);
         }
-        // Notify followers of the unfollowed user
         userToFollow.followers.forEach((followerId) => {
           const socketId = req.io.getRecipientSocketId(followerId.toString());
           if (socketId) {
@@ -329,17 +355,14 @@ const followUnFollowUser = async (req, res) => {
             name: currentUser.name,
           },
         };
-        // Emit to the followed user
         const followedSocketId = req.io.getRecipientSocketId(id);
         if (followedSocketId) {
           req.io.to(followedSocketId).emit("userFollowed", followData);
         }
-        // Emit to the current user
         const currentUserSocketId = req.io.getRecipientSocketId(currentUserId.toString());
         if (currentUserSocketId) {
           req.io.to(currentUserSocketId).emit("userFollowed", followData);
         }
-        // Notify followers of the followed user
         userToFollow.followers.forEach((followerId) => {
           const socketId = req.io.getRecipientSocketId(followerId.toString());
           if (socketId) {
@@ -355,9 +378,7 @@ const followUnFollowUser = async (req, res) => {
   }
 };
 
-
-
-
+// Update User
 const updateUser = async (req, res) => {
   const { name, email, username, password, bio } = req.body;
   let profilePic;
@@ -429,6 +450,7 @@ const updateUser = async (req, res) => {
   }
 };
 
+// Get Suggested Users
 const getSuggestedUsers = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -457,6 +479,7 @@ const getSuggestedUsers = async (req, res) => {
   }
 };
 
+// Freeze Account
 const freezeAccount = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
@@ -474,6 +497,7 @@ const freezeAccount = async (req, res) => {
   }
 };
 
+// Ban User
 const banUser = async (req, res) => {
   try {
     if (!req.user.isAdmin) return res.status(403).json({ error: "Admin access required" });
@@ -492,6 +516,7 @@ const banUser = async (req, res) => {
   }
 };
 
+// Unban User
 const unbanUser = async (req, res) => {
   try {
     if (!req.user.isAdmin) return res.status(403).json({ error: "Admin access required" });
@@ -510,6 +535,7 @@ const unbanUser = async (req, res) => {
   }
 };
 
+// Get User Dashboard
 const getUserDashboard = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -534,87 +560,209 @@ const getUserDashboard = async (req, res) => {
   }
 };
 
+// Get Admin Realtime Dashboard
 const getAdminRealtimeDashboard = async (req, res) => {
   try {
-    if (!req.user.isAdmin) {
+    if (!req.user?.isAdmin) {
       return res.status(403).json({ error: "Admin access required" });
     }
 
-    // Total users
-    const totalUsers = await User.countDocuments({ isBanned: false });
-    const bannedUsers = await User.countDocuments({ isBanned: true });
+    const range = req.query.range || 'week';
+    let days;
+    switch (range) {
+      case 'week': days = 7; break;
+      case 'month': days = 30; break;
+      case 'year': days = 365; break;
+      default: days = 7;
+    }
 
-    // Total posts
-    const totalPosts = await Post.countDocuments({ isBanned: false });
-    const bannedPosts = await Post.countDocuments({ isBanned: true });
+    const now = new Date();
+    const startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
-    // User activity (e.g., posts per user)
-    const userActivity = await Post.aggregate([
-      { $match: { isBanned: false } },
-      { $group: { _id: "$postedBy", postCount: { $sum: 1 } } },
-      { $lookup: { from: "users", localField: "_id", foreignField: "_id", as: "user" } },
-      { $unwind: "$user" },
-      { $project: { username: "$user.username", postCount: 1 } },
-      { $sort: { postCount: -1 } },
-      { $limit: 10 }, // Top 10 active users
-    ]);
-
-    // Post trends (e.g., posts per day over last 7 days)
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const postTrends = await Post.aggregate([
-      { $match: { createdAt: { $gte: sevenDaysAgo }, isBanned: false } },
-      {
-        $group: {
-          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-          count: { $sum: 1 },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]);
-
-    // Pie chart data: User status distribution
-    const userStatusPie = {
-      labels: ["Active Users", "Banned Users"],
-      data: [totalUsers, bannedUsers],
-    };
-
-    // Pie chart data: Post status distribution
-    const postStatusPie = {
-      labels: ["Active Posts", "Banned Posts"],
-      data: [totalPosts, bannedPosts],
-    };
-
-    // Bar chart data: Top active users
-    const userActivityBar = {
-      labels: userActivity.map((u) => u.username),
-      data: userActivity.map((u) => u.postCount),
-    };
-
-    // Bar chart data: Post trends
-    const postTrendsBar = {
-      labels: postTrends.map((t) => t._id),
-      data: postTrends.map((t) => t.count),
-    };
-
-    // Response with all dashboard data
-    const dashboardData = {
+    const [
       totalUsers,
       bannedUsers,
       totalPosts,
       bannedPosts,
-      userStatusPie,
-      postStatusPie,
-      userActivityBar,
-      postTrendsBar,
-      timestamp: new Date().toISOString(),
-    };
+      likesAndComments,
+      bookmarksAndShares,
+      activityData,
+      recentPosts,
+      activeUsersByHour,
+      userGrowth,
+      postGrowth,
+    ] = await Promise.all([
+      User.countDocuments({}),
+      User.countDocuments({ isBanned: true }),
+      Post.countDocuments({}),
+      Post.countDocuments({ isBanned: true }),
+      Post.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalLikes: { $sum: { $size: "$likes" } },
+            totalComments: { $sum: { $size: "$comments" } },
+          },
+        },
+      ]),
+      Post.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalBookmarks: { $sum: { $size: "$bookmarks" } },
+            totalShares: { $sum: { $size: "$shares" } },
+          },
+        },
+      ]),
+      Post.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: startDate },
+            isBanned: false,
+          },
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
+            },
+            posts: { $sum: 1 },
+            likes: { $sum: { $size: "$likes" } },
+            comments: { $sum: { $size: "$comments" } },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+      Post.find()
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .populate("postedBy", "username profilePic isBanned")
+        .lean(),
+      User.aggregate([
+        {
+          $match: {
+            lastActive: { $gte: startDate },
+          },
+        },
+        {
+          $group: {
+            _id: { $hour: "$lastActive" },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+      User.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: startDate },
+          },
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            newUsers: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+      Post.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: startDate },
+            isBanned: false,
+          },
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            newPosts: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+    ]);
 
-    res.status(200).json(dashboardData);
+    // Format activity data to fill missing days
+    const formattedActivityData = [];
+    for (let i = 0; i < days; i++) {
+      const date = new Date(startDate.getTime() + i * 24 * 60 * 60 * 1000);
+      const dateStr = date.toISOString().split('T')[0];
+      const existingData = activityData.find((d) => d._id === dateStr);
+      formattedActivityData.push({
+        date: dateStr,
+        posts: existingData?.posts || 0,
+        likes: existingData?.likes || 0,
+        comments: existingData?.comments || 0,
+      });
+    }
+
+    // Format user growth data
+    const formattedUserGrowth = [];
+    for (let i = 0; i < days; i++) {
+      const date = new Date(startDate.getTime() + i * 24 * 60 * 60 * 1000);
+      const dateStr = date.toISOString().split('T')[0];
+      const existingData = userGrowth.find((d) => d._id === dateStr);
+      formattedUserGrowth.push({
+        date: dateStr,
+        newUsers: existingData?.newUsers || 0,
+      });
+    }
+
+    // Format post growth data
+    const formattedPostGrowth = [];
+    for (let i = 0; i < days; i++) {
+      const date = new Date(startDate.getTime() + i * 24 * 60 * 60 * 1000);
+      const dateStr = date.toISOString().split('T')[0];
+      const existingData = postGrowth.find((d) => d._id === dateStr);
+      formattedPostGrowth.push({
+        date: dateStr,
+        newPosts: existingData?.newPosts || 0,
+      });
+    }
+
+    // Format active users by hour
+    const activeUsersByHourFormatted = Array.from({ length: 24 }, (_, i) => ({
+      hour: i,
+      users: activeUsersByHour.find((item) => item._id === i)?.count || 0,
+    }));
+
+    // Calculate engagement rate
+    const activeUsers = totalUsers - bannedUsers;
+    const engagementRate = activeUsers > 0
+      ? ((likesAndComments[0]?.totalLikes || 0 + likesAndComments[0]?.totalComments || 0) / activeUsers).toFixed(2)
+      : 0;
+
+    res.status(200).json({
+      totalUsers,
+      bannedUsers,
+      totalPosts,
+      bannedPosts,
+      totalLikes: likesAndComments[0]?.totalLikes || 0,
+      totalComments: likesAndComments[0]?.totalComments || 0,
+      totalBookmarks: bookmarksAndShares[0]?.totalBookmarks || 0,
+      totalShares: bookmarksAndShares[0]?.totalShares || 0,
+      activityData: formattedActivityData,
+      userActivityByHour: activeUsersByHourFormatted,
+      userGrowth: formattedUserGrowth,
+      postGrowth: formattedPostGrowth,
+      recentPosts: recentPosts.map((post) => ({
+        ...post,
+        text: post.text || "No content",
+        postedBy: post.postedBy || { username: "Unknown", isBanned: false },
+      })),
+      engagementRate,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
-    console.log("Error in getAdminRealtimeDashboard: ", error.message);
+    console.error("Error in getAdminRealtimeDashboard:", error);
+    res.status(500).json({
+      error: "Failed to fetch dashboard data",
+      details: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
   }
 };
+
+// Get All Users
 const getAllUsers = async (req, res) => {
   try {
     if (!req.user.isAdmin) {
@@ -645,6 +793,6 @@ export {
   getUserStats,
   getAdminRealtimeDashboard,
   getMultipleUsers,
- 
   getAllUsers,
+  refreshToken,
 };

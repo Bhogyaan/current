@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  Box,
   Button,
   FormControl,
   IconButton,
@@ -10,6 +9,8 @@ import {
   TextField,
   Typography,
   CircularProgress,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import { Visibility, VisibilityOff } from '@mui/icons-material';
 import { motion } from 'framer-motion';
@@ -26,6 +27,9 @@ export default function LoginCard({ isAdmin = false }) {
   const [loading, setLoading] = useState(false);
   const showToast = useShowToast();
   const navigate = useNavigate();
+  const theme = useTheme();
+  const isXs = useMediaQuery(theme.breakpoints.down('sm'));
+  const isSm = useMediaQuery(theme.breakpoints.between('sm', 'md'));
 
   const [inputs, setInputs] = useState({
     username: isAdmin ? 'adminblog' : '',
@@ -33,6 +37,11 @@ export default function LoginCard({ isAdmin = false }) {
   });
 
   const handleLogin = async () => {
+    if (!inputs.username || !inputs.password) {
+      showToast('Error', 'Please fill all fields', 'error');
+      return;
+    }
+
     setLoading(true);
     try {
       const endpoint = isAdmin ? '/api/users/admin/login' : '/api/users/login';
@@ -61,11 +70,40 @@ export default function LoginCard({ isAdmin = false }) {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.4 }}
+      style={{ padding: isXs ? '0.5rem' : isSm ? '1rem' : '1.5rem 0' }}
     >
-      <Stack spacing={3}>
+      <Typography
+        variant={isXs ? 'h6' : 'h5'}
+        sx={{
+          textAlign: 'center',
+          mb: isXs ? 2 : isSm ? 2.5 : 3,
+          fontFamily: "'Inter', sans-serif",
+          fontWeight: 700,
+          color: 'transparent',
+          background: 'linear-gradient(90deg, #FFD700, #4ECDC4, #A1C4FD)',
+          backgroundSize: '200% 200%',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          animation: 'gradientShift 5s ease infinite, textGlow 3s ease-in-out infinite alternate',
+          fontSize: isXs ? '1.4rem' : isSm ? '1.6rem' : '1.8rem',
+          '@keyframes gradientShift': {
+            '0%': { backgroundPosition: '0% 50%' },
+            '50%': { backgroundPosition: '100% 50%' },
+            '100%': { backgroundPosition: '0% 50%' }
+          },
+          '@keyframes textGlow': {
+            '0%': { textShadow: '0 0 8px rgba(255, 215, 0, 0.3)' },
+            '100%': { textShadow: '0 0 15px rgba(161, 196, 253, 0.5)' }
+          }
+        }}
+      >
+        {isAdmin ? 'Admin Login' : 'Welcome Back'}
+      </Typography>
+
+      <Stack spacing={isXs ? 2 : isSm ? 2.5 : 3}>
         <FormControl fullWidth required>
           <TextField
             label="Username"
@@ -73,22 +111,16 @@ export default function LoginCard({ isAdmin = false }) {
             value={inputs.username}
             onChange={(e) => !isAdmin && setInputs((prev) => ({ ...prev, username: e.target.value }))}
             disabled={isAdmin}
-            placeholder="testuser1"
-            variant="outlined"
+            placeholder="Enter username"
             sx={{
-              '& .MuiOutlinedInput-root': {
-                borderRadius: 12, // Increased for premium feel
-                background: 'rgba(255, 255, 255, 0.05)',
-                '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.2)' },
-                '&:hover fieldset': { borderColor: '#a78bfa' },
-                '&.Mui-focused fieldset': { borderColor: '#a78bfa' },
+              ...textFieldStyles,
+              '& .MuiInputBase-input': {
+                fontSize: isXs ? '0.9rem' : isSm ? '0.95rem' : '1rem',
               },
-              '& .MuiInputLabel-root': { color: 'rgba(255, 255, 255, 0.7)' },
-              '& .MuiInputLabel-root.Mui-focused': { color: '#a78bfa' },
-              '& .MuiInputBase-input': { color: '#fff' },
             }}
           />
         </FormControl>
+
         <FormControl fullWidth required>
           <TextField
             label="Password"
@@ -96,69 +128,195 @@ export default function LoginCard({ isAdmin = false }) {
             value={inputs.password}
             onChange={(e) => !isAdmin && setInputs((prev) => ({ ...prev, password: e.target.value }))}
             disabled={isAdmin}
-            placeholder="Enter your password"
-            variant="outlined"
+            placeholder="Enter password"
             sx={{
-              '& .MuiOutlinedInput-root': {
-                borderRadius: 12, // Increased for premium feel
-                background: 'rgba(255, 255, 255, 0.05)',
-                '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.2)' },
-                '&:hover fieldset': { borderColor: '#a78bfa' },
-                '&.Mui-focused fieldset': { borderColor: '#a78bfa' },
+              ...textFieldStyles,
+              '& .MuiInputBase-input': {
+                fontSize: isXs ? '0.9rem' : isSm ? '0.95rem' : '1rem',
               },
-              '& .MuiInputLabel-root': { color: 'rgba(255, 255, 255, 0.7)' },
-              '& .MuiInputLabel-root.Mui-focused': { color: '#a78bfa' },
-              '& .MuiInputBase-input': { color: '#fff' },
             }}
             InputProps={{
               endAdornment: (
                 <InputAdornment position="end">
                   <IconButton
                     onClick={() => setShowPassword((prev) => !prev)}
-                    edge="end"
-                    sx={{ color: 'rgba(255, 255, 255, 0.7)' }}
+                    sx={{
+                      color: '#E6E6FA',
+                      '&:hover': {
+                        color: '#A1C4FD',
+                        backgroundColor: 'rgba(161, 196, 253, 0.1)',
+                        transform: 'scale(1.1)'
+                      },
+                      transition: 'all 0.3s ease'
+                    }}
                   >
-                    {showPassword ? <VisibilityOff /> : <Visibility />}
+                    {showPassword ? (
+                      <VisibilityOff fontSize={isXs ? 'small' : 'medium'} />
+                    ) : (
+                      <Visibility fontSize={isXs ? 'small' : 'medium'} />
+                    )}
                   </IconButton>
                 </InputAdornment>
               ),
             }}
           />
         </FormControl>
+
         <Button
           variant="contained"
-          size="large"
           onClick={handleLogin}
           disabled={loading}
           fullWidth
           sx={{
-            py: 1.5,
-            borderRadius: 12, // Increased for premium feel
-            textTransform: 'none',
-            fontWeight: 'bold',
-            fontSize: '1rem',
-            bgcolor: '#a78bfa',
-            '&:hover': {
-              bgcolor: '#8b5cf6',
-              transform: 'scale(1.05)',
-              transition: 'all 0.3s ease',
+            ...buttonStyles,
+            py: isXs ? 1.1 : isSm ? 1.2 : 1.3,
+            fontSize: isXs ? '0.9rem' : isSm ? '0.95rem' : '1rem',
+            fontWeight: 600,
+            letterSpacing: '0.5px',
+            mt: isXs ? 1 : 1.5,
+            background: loading
+              ? 'rgba(255, 215, 0, 0.3)'
+              : 'linear-gradient(90deg, #FFD700, #4ECDC4, #A1C4FD)',
+            backgroundSize: '200% 200%',
+            position: 'relative',
+            overflow: 'hidden',
+            '&::before': {
+              content: '""',
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              background: 'linear-gradient(90deg, #FFD700, #4ECDC4, #A1C4FD, #C2E9FB)',
+              backgroundSize: '300% 300%',
+              opacity: 0,
+              transition: 'all 0.5s ease',
+              zIndex: -1
             },
+            '&:hover': {
+              animation: 'gradientShift 4s ease infinite',
+              transform: 'translateY(-3px)',
+              boxShadow: '0 8px 20px rgba(161, 196, 253, 0.5)',
+              '&::before': {
+                opacity: 1
+              }
+            },
+            '&:disabled': {
+              transform: 'none',
+              boxShadow: 'none',
+              '&::before': {
+                opacity: 0
+              }
+            },
+            '@keyframes gradientShift': {
+              '0%': { backgroundPosition: '0% 50%' },
+              '50%': { backgroundPosition: '100% 50%' },
+              '100%': { backgroundPosition: '0% 50%' }
+            }
           }}
         >
-          {loading ? <CircularProgress size={24} sx={{ color: '#fff' }} /> : 'Log In'}
+          {loading ? (
+            <CircularProgress
+              size={isXs ? 22 : 24}
+              sx={{ color: '#E6E6FA' }}
+            />
+          ) : (
+            'Log In'
+          )}
         </Button>
-        <Typography variant="body2" color="rgba(255, 255, 255, 0.7)" textAlign="center">
-          Not a user?{' '}
-          <Link
-            href="#"
-            color="#a78bfa"
-            onClick={() => setAuthScreen('signup')}
-            sx={{ textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+
+        {!isAdmin && (
+          <Typography
+            variant="body2"
+            sx={{
+              fontFamily: "'Inter', sans-serif",
+              color: 'rgba(230, 230, 250, 0.7)',
+              textAlign: 'center',
+              fontSize: isXs ? '0.8rem' : isSm ? '0.85rem' : '0.9rem',
+              mt: isXs ? 0.5 : 1,
+            }}
           >
-            Sign Up
-          </Link>
-        </Typography>
+            Not a user?{' '}
+            <Link
+              component="button"
+              onClick={() => setAuthScreen('signup')}
+              sx={{
+                color: '#A1C4FD',
+                fontWeight: 600,
+                position: 'relative',
+                '&:hover': {
+                  color: '#C2E9FB',
+                  '&::after': {
+                    content: '""',
+                    position: 'absolute',
+                    bottom: -2,
+                    left: 0,
+                    width: '100%',
+                    height: '2px',
+                    background: 'linear-gradient(90deg, #A1C4FD, #C2E9FB)',
+                    animation: 'underlineGrow 0.3s ease-out forwards',
+                    '@keyframes underlineGrow': {
+                      '0%': { transform: 'scaleX(0)' },
+                      '100%': { transform: 'scaleX(1)' }
+                    }
+                  }
+                },
+              }}
+            >
+              Sign Up
+            </Link>
+          </Typography>
+        )}
       </Stack>
     </motion.div>
   );
 }
+
+const textFieldStyles = {
+  '& .MuiOutlinedInput-root': {
+    borderRadius: 12,
+    background: 'rgba(20, 20, 30, 0.5)',
+    '& fieldset': {
+      borderColor: 'rgba(78, 205, 196, 0.3)',
+      transition: 'all 0.3s ease',
+    },
+    '&:hover fieldset': {
+      borderColor: 'rgba(161, 196, 253, 0.5)',
+      boxShadow: '0 0 10px rgba(161, 196, 253, 0.1)',
+    },
+    '&.Mui-focused fieldset': {
+      borderColor: '#A1C4FD',
+      boxShadow: '0 0 15px rgba(161, 196, 253, 0.2)',
+    },
+  },
+  '& .MuiInputLabel-root': {
+    color: 'rgba(230, 230, 250, 0.7)',
+    fontFamily: "'Inter', sans-serif",
+    fontSize: { xs: '0.9rem', sm: '0.95rem', md: '1rem' },
+    '&.Mui-focused': {
+      color: '#A1C4FD',
+    },
+  },
+  '& .MuiInputBase-input': {
+    color: '#E6E6FA',
+    fontFamily: "'Inter', sans-serif",
+    padding: { xs: '12px 14px', sm: '14px 16px', md: '16px 18px' },
+    '&::placeholder': {
+      color: 'rgba(230, 230, 250, 0.5)',
+      opacity: 1,
+    },
+  },
+};
+
+const buttonStyles = {
+  borderRadius: 12,
+  textTransform: 'none',
+  fontFamily: "'Inter', sans-serif",
+  transition: 'all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1)',
+  boxShadow: '0 4px 15px rgba(161, 196, 253, 0.3)',
+  '&:disabled': {
+    background: 'rgba(230, 230, 250, 0.1)',
+    boxShadow: 'none',
+    color: 'rgba(230, 230, 250, 0.3)',
+  },
+};

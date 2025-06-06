@@ -60,12 +60,34 @@ const UserPage = () => {
   const socketContext = useSocket();
   const socket = socketContext?.socket;
 
+  // Debug state initialization
+  useEffect(() => {
+    console.log("UserPage: currentUser", currentUser);
+    console.log("UserPage: user", user);
+    console.log("UserPage: following", following, "updating", updating);
+    console.log("UserPage: condition check", {
+      currentUserExists: !!currentUser,
+      userExists: !!user,
+      isOwnProfile: currentUser?._id === user?._id,
+    });
+  }, [currentUser, user, following, updating]);
+
+  // Redirect admin to AdminProfilePage if viewing their own profile
   if (currentUser?.isAdmin && currentUser?.username === username) {
     return <AdminProfilePage />;
   }
 
+  // Redirect to login if not authenticated
   useEffect(() => {
-    console.log("Current user:", currentUser);
+    if (!currentUser) {
+      console.warn("UserPage: No currentUser, redirecting to /auth");
+      navigate("/auth");
+    }
+  }, [currentUser, navigate]);
+
+  useEffect(() => {
+    if (!currentUser) return; // Don't fetch if not logged in
+
     const getUserAndStats = async () => {
       try {
         let userData;
@@ -74,17 +96,17 @@ const UserPage = () => {
         } else {
           const userRes = await fetch(`/api/users/profile/${username}`, {
             credentials: "include",
+            headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
           });
-          const userResponse = await userRes.json();
-          console.log("User profile response:", userResponse);
-          if (!userRes.ok) throw new Error(userResponse.error || "User profile not found");
-          userData = userResponse;
+          if (!userRes.ok) throw new Error("User profile not found");
+          userData = await userRes.json();
         }
 
         let statsData = {};
         try {
           const statsRes = await fetch(`/api/users/stats/${username}`, {
             credentials: "include",
+            headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
           });
           statsData = statsRes.ok
             ? await statsRes.json()
@@ -106,16 +128,12 @@ const UserPage = () => {
     const getPosts = async () => {
       try {
         const endpoint = currentUser?.isAdmin ? "/api/posts/all" : `/api/posts/user/${username}`;
-        console.log("Fetching posts from:", endpoint);
         const res = await fetch(endpoint, {
           credentials: "include",
-          headers: {
-            "X-Debug-Cookie": document.cookie || "No cookie sent", // Debug: Log cookie
-          },
+          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
         });
         const data = await res.json();
-        console.log("Posts response:", { status: res.status, data });
-        if (!res.ok) throw new Error(data.error || `HTTP error ${res.status}`);
+        if (data.error) throw new Error(data.error);
         const enrichedPosts = data.map((post) => ({
           ...post,
           postedBy: post.postedBy._id
@@ -124,7 +142,7 @@ const UserPage = () => {
         }));
         setPostsState((prev) => ({ ...prev, posts: enrichedPosts }));
       } catch (error) {
-        console.error("Error fetching posts:", error.message, error.stack);
+        console.error("Error fetching posts:", error.stack);
         message.error(error.message || "Failed to load posts");
       } finally {
         setFetchingPosts(false);
@@ -135,20 +153,20 @@ const UserPage = () => {
       try {
         const res = await fetch(`/api/posts/bookmarks/${username}`, {
           credentials: "include",
-          headers: {
-            "X-Debug-Cookie": document.cookie || "No cookie sent",
-          },
+          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
         });
         const data = await res.json();
-        console.log("Bookmarks response:", { status: res.status, data });
-        if (!res.ok) throw new Error(data.error || `HTTP error ${res.status}`);
-        const enrichedBookmarks = data.map((post) => ({
-          ...post,
-          postedBy: post.postedBy._id
-            ? post.postedBy
-            : { _id: post.postedBy, username: user?.username, profilePic: user?.profilePic },
-        }));
-        setPostsState((prev) => ({ ...prev, bookmarks: enrichedBookmarks || [] }));
+        if (res.ok) {
+          const enrichedBookmarks = data.map((post) => ({
+            ...post,
+            postedBy: post.postedBy._id
+              ? post.postedBy
+              : { _id: post.postedBy, username: user?.username, profilePic: user?.profilePic },
+          }));
+          setPostsState((prev) => ({ ...prev, bookmarks: enrichedBookmarks || [] }));
+        } else {
+          throw new Error(data.error || "Failed to fetch bookmarks");
+        }
       } catch (error) {
         console.error("Error fetching bookmarks:", error.stack);
         message.error(error.message || "Failed to load bookmarks");
@@ -163,9 +181,8 @@ const UserPage = () => {
   }, [username, currentUser, setPostsState, user?.username, user?.profilePic]);
 
   useEffect(() => {
-    if (!socket) {
-      console.warn("Socket is not initialized in UserPage");
-      message.warning("Real-time updates are unavailable. Please check your connection.");
+    if (!socket || !currentUser) {
+      if (currentUser && !socket) console.warn("Socket is not initialized in UserPage");
       return;
     }
 
@@ -231,7 +248,7 @@ const UserPage = () => {
 
   const handleLogout = () => {
     localStorage.removeItem("user-NRBLOG");
-    document.cookie = "jwt=; Max-Age=0; path=/"; // Clear jwt cookie
+    localStorage.removeItem("token");
     setCurrentUser(null);
     navigate("/auth");
     message.success("Logged out successfully");
@@ -251,6 +268,7 @@ const UserPage = () => {
       const res = await fetch(`/api/users/${action}/${user._id}`, {
         method: "POST",
         credentials: "include",
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
       });
       const data = await res.json();
       if (res.ok) {
@@ -344,86 +362,98 @@ const UserPage = () => {
                       display: "flex",
                       alignItems: "center",
                       mb: 1,
-                      justifyContent: isSmallScreen ? "center" : "flex-start",
+                      justifyContent: isSmallScreen ? "center" : "space-between",
                       flexWrap: "wrap",
                       gap: 1,
+                      minHeight: "40px", // Ensure space for buttons
                     }}
                   >
-                    <Typography variant="h6" sx={{ fontWeight: 400, mr: 2, color: "text.primary" }}>
-                      {user.username}
-                    </Typography>
-                    {user.isVerified && <VerifiedIcon color="primary" fontSize="small" />}
-                    {currentUser?._id === user._id ? (
-                      <>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          onClick={handleEditProfile}
-                          sx={{
-                            mr: 1,
-                            borderRadius: 20,
-                            textTransform: "none",
-                            borderColor: "primary.main",
-                            color: "text.primary",
-                            "&:hover": { bgcolor: "rgba(255, 255, 255, 0.1)" },
-                          }}
-                        >
-                          Edit Profile
-                        </Button>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          onClick={handleLogout}
-                          sx={{
-                            borderRadius: 20,
-                            textTransform: "none",
-                            borderColor: "primary.main",
-                            color: "text.primary",
-                            "&:hover": { bgcolor: "rgba(255, 255, 255, 0.1)" },
-                          }}
-                        >
-                          Logout
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button
-                          variant={following ? "outlined" : "contained"}
-                          size="small"
-                          onClick={handleFollowUnfollow}
-                          disabled={updating}
-                          sx={{
-                            mr: 1,
-                            borderRadius: 20,
-                            textTransform: "none",
-                            bgcolor: following ? "transparent" : "primary.main",
-                            color: "text.primary",
-                            borderColor: following ? "primary.main" : "transparent",
-                            "&:hover": { bgcolor: following ? "rgba(255, 255, 255, 0.1)" : "#6b12cb" },
-                          }}
-                        >
-                          {following ? "Unfollow" : "Follow"}
-                        </Button>
-                        {currentUser?.isAdmin && (
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                      <Typography variant="h6" sx={{ fontWeight: 400, color: "text.primary" }}>
+                        {user.username}
+                      </Typography>
+                      {user.isVerified && <VerifiedIcon color="primary" fontSize="small" />}
+                    </Box>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        gap: 1,
+                        ml: isSmallScreen ? 0 : "auto", // Push to right on larger screens
+                        justifyContent: isSmallScreen ? "center" : "flex-end",
+                        width: isSmallScreen ? "100%" : "auto",
+                      }}
+                    >
+                      {!currentUser || !user || currentUser._id === user._id ? (
+                        <>
                           <Button
                             variant="outlined"
                             size="small"
-                            onClick={handleBanUnbanUser}
+                            onClick={handleEditProfile}
                             sx={{
                               borderRadius: 20,
                               textTransform: "none",
-                              borderColor: user.isBanned ? "success.main" : "error.main",
-                              color: user.isBanned ? "success.main" : "error.main",
-                              "&:hover": {
-                                bgcolor: user.isBanned ? "rgba(0, 255, 0, 0.1)" : "rgba(255, 0, 0, 0.1)",
-                              },
+                              borderColor: "primary.main",
+                              color: "text.primary",
+                              "&:hover": { bgcolor: "rgba(255, 255, 255, 0.1)" },
                             }}
                           >
-                            {user.isBanned ? "Unban" : "Ban"}
+                            Edit Profile
                           </Button>
-                        )}
-                      </>
-                    )}
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            onClick={handleLogout}
+                            sx={{
+                              borderRadius: 20,
+                              textTransform: "none",
+                              borderColor: "primary.main",
+                              color: "text.primary",
+                              "&:hover": { bgcolor: "rgba(255, 255, 255, 0.1)" },
+                            }}
+                          >
+                            Logout
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            variant={following ? "outlined" : "contained"}
+                            size="small"
+                            onClick={handleFollowUnfollow}
+                            disabled={updating || user.isBanned}
+                            sx={{
+                              borderRadius: 20,
+                              textTransform: "none",
+                              bgcolor: following ? "transparent" : "primary.main",
+                              color: "text.primary",
+                              borderColor: following ? "primary.main" : "transparent",
+                              "&:hover": { bgcolor: following ? "rgba(255, 255, 255, 0.1)" : "#6b12cb" },
+                              visibility: "visible",
+                            }}
+                          >
+                            {following ? "Unfollow" : "Follow"}
+                          </Button>
+                          {currentUser?.isAdmin && (
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              onClick={handleBanUnbanUser}
+                              sx={{
+                                borderRadius: 20,
+                                textTransform: "none",
+                                borderColor: user.isBanned ? "success.main" : "error.main",
+                                color: user.isBanned ? "success.main" : "error.main",
+                                "&:hover": {
+                                  bgcolor: user.isBanned ? "rgba(0, 255, 0, 0.1)" : "rgba(255, 0, 0, 0.1)",
+                                },
+                              }}
+                            >
+                              {user.isBanned ? "Unban" : "Ban"}
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </Box>
                   </Box>
                   <Box
                     sx={{
@@ -471,7 +501,7 @@ const UserPage = () => {
                 </Box>
               </Box>
             </Card>
-            {/* Rest of the JSX remains unchanged */}
+
             <Box
               sx={{
                 position: "sticky",
@@ -480,24 +510,35 @@ const UserPage = () => {
                 bgcolor: "background.paper",
                 borderBottom: "1px solid rgba(255, 255, 255, 0.2)",
                 borderRadius: "12px",
+                overflowX: "auto",
+                width: "100%",
+                maxWidth: 600,
+                mx: "auto",
               }}
             >
               <Tabs
                 value={tabValue}
                 onChange={(e, newValue) => setTabValue(newValue)}
                 variant={isSmallScreen ? "scrollable" : "fullWidth"}
-                scrollButtons={isSmallScreen ? "auto" : "off"}
+                scrollButtons={isSmallScreen ? true : false}
+                allowScrollButtonsMobile
                 sx={{
                   "& .MuiTab-root": {
                     minWidth: isSmallScreen ? "100px" : "auto",
                     padding: isSmallScreen ? "6px 12px" : "12px 16px",
                     color: "text.secondary",
                     "&.Mui-selected": { color: "primary.main" },
+                    whiteSpace: "nowrap",
                   },
                   "& .MuiTabs-scrollButtons": {
-                    "& .MuiButtonBase-root": {
-                      color: "text.primary",
+                    color: "text.primary",
+                    width: isSmallScreen ? "30px" : "40px",
+                    "&.Mui-disabled": {
+                      opacity: 0.3,
                     },
+                  },
+                  "& .MuiTabs-scroller": {
+                    overflow: isSmallScreen ? "auto" : "hidden",
                   },
                 }}
                 TabIndicatorProps={{ style: { backgroundColor: "primary.main" } }}
@@ -563,7 +604,264 @@ const UserPage = () => {
                   )}
                 </Box>
               )}
-              {/* Rest of the tabs (Bookmarked Posts, Followers, Following, Dashboard) remain unchanged */}
+
+              {tabValue === 1 && (
+                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                  {fetchingBookmarks ? (
+                    <Card
+                      sx={{
+                        bgcolor: "background.paper",
+                        borderRadius: "12px",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        width: "100%",
+                        maxWidth: 500,
+                        mx: "auto",
+                      }}
+                    >
+                      <CardContent sx={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%" }}>
+                        <CircularProgress size={24} sx={{ color: "primary.main" }} />
+                      </CardContent>
+                    </Card>
+                  ) : (postsState.bookmarks || []).length === 0 ? (
+                    <Card
+                      sx={{
+                        bgcolor: "background.paper",
+                        borderRadius: "12px",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        width: "100%",
+                        maxWidth: 500,
+                        mx: "auto",
+                      }}
+                    >
+                      <CardContent
+                        sx={{ textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}
+                      >
+                        <Typography variant="body1" color="text.primary">
+                          No bookmarked posts yet
+                        </Typography>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    (postsState.bookmarks || []).map((post) => (
+                      <Box key={post._id} sx={{ width: "100%", maxWidth: 500, mb: 2 }}>
+                        <Post
+                          post={post}
+                          postedBy={post.postedBy}
+                          isAdminView={currentUser?.isAdmin}
+                          onBookmark={handleBookmark}
+                        />
+                      </Box>
+                    ))
+                  )}
+                </Box>
+              )}
+
+              {tabValue === 2 && (
+                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", pt: 2 }}>
+                  {user.followers?.length === 0 ? (
+                    <Card
+                      sx={{
+                        bgcolor: "background.paper",
+                        borderRadius: "12px",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        width: "100%",
+                        maxWidth: 500,
+                        mx: "auto",
+                      }}
+                    >
+                      <CardContent
+                        sx={{ textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}
+                      >
+                        <Typography variant="body1" color="text.primary">
+                          No followers yet
+                        </Typography>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    user.followers.map((followerId) => (
+                      <Box key={followerId} sx={{ width: "100%", maxWidth: 500, mb: 1 }}>
+                        <FollowerCard followerId={followerId} navigate={navigate} />
+                      </Box>
+                    ))
+                  )}
+                </Box>
+              )}
+
+              {tabValue === 3 && (
+                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", pt: 2 }}>
+                  {user.following?.length === 0 ? (
+                    <Card
+                      sx={{
+                        bgcolor: "background.paper",
+                        borderRadius: "12px",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        width: "100%",
+                        maxWidth: 500,
+                        mx: "auto",
+                      }}
+                    >
+                      <CardContent
+                        sx={{ textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}
+                      >
+                        <Typography variant="body1" color="text.primary">
+                          Not following anyone yet
+                        </Typography>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    user.following.map((followingId) => (
+                      <Box key={followingId} sx={{ width: "100%", maxWidth: 500, mb: 1 }}>
+                        <FollowingCard followingId={followingId} navigate={navigate} />
+                      </Box>
+                    ))
+                  )}
+                </Box>
+              )}
+
+              {tabValue === 4 && currentUser?._id === user._id && (
+                <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", pt: 2 }}>
+                  <Typography
+                    variant="h5"
+                    sx={{ color: "text.primary", mb: 3, fontWeight: 500, textAlign: "center" }}
+                  >
+                    Your Activity Dashboard
+                  </Typography>
+                  <Box sx={{ width: "100%", maxWidth: 600, mx: "auto" }}>
+                    <Card
+                      sx={{
+                        mb: 3,
+                        p: { xs: 2, sm: 3 },
+                        bgcolor: "background.paper",
+                        borderRadius: "12px",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                      }}
+                    >
+                      <Typography
+                        variant="h6"
+                        sx={{ color: "text.primary", mb: 2, fontWeight: 500 }}
+                      >
+                        Engagement Overview
+                      </Typography>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <PieChart>
+                          <Pie
+                            data={pieData}
+                            dataKey="value"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={isSmallScreen ? 60 : 80}
+                            label
+                          >
+                            {pieData.map((entry, index) => (
+                              <Cell
+                                key={`cell-${index}`}
+                                fill={COLORS[index % COLORS.length]}
+                              />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: "background.paper",
+                              borderRadius: 8,
+                              border: "1px solid rgba(255, 255, 255, 0.2)",
+                              color: "text.primary",
+                            }}
+                          />
+                          <Legend />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </Card>
+
+                    <Card
+                      sx={{
+                        mb: 3,
+                        p: { xs: 2, sm: 3 },
+                        bgcolor: "background.paper",
+                        borderRadius: "12px",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                      }}
+                    >
+                      <Typography
+                        variant="h6"
+                        sx={{ color: "text.primary", mb: 2, fontWeight: 500 }}
+                      >
+                        Activity Trend
+                      </Typography>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <LineChart data={lineData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.2)" />
+                          <XAxis dataKey="month" stroke="text.secondary" />
+                          <YAxis stroke="text.secondary" />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: "background.paper",
+                              borderRadius: 8,
+                              border: "1px solid rgba(255, 255, 255, 0.2)",
+                              color: "text.primary",
+                            }}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="likes"
+                            stroke={COLORS[0]}
+                            strokeWidth={2}
+                            activeDot={{ r: 8 }}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="posts"
+                            stroke={COLORS[1]}
+                            strokeWidth={2}
+                            activeDot={{ r: 8 }}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="comments"
+                            stroke={COLORS[2]}
+                            strokeWidth={2}
+                            activeDot={{ r: 8 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </Card>
+
+                    <Card
+                      sx={{
+                        p: { xs: 2, sm: 3 },
+                        bgcolor: "background.paper",
+                        borderRadius: "12px",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                      }}
+                    >
+                      <Typography
+                        variant="h6"
+                        sx={{ color: "text.primary", mb: 2, fontWeight: 500 }}
+                      >
+                        Activity Breakdown
+                      </Typography>
+                      <ResponsiveContainer width="100%" height={250}>
+                        <BarChart data={barData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.2)" />
+                          <XAxis dataKey="month" stroke="text.secondary" />
+                          <YAxis stroke="text.secondary" />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: "background.paper",
+                              borderRadius: 8,
+                              border: "1px solid rgba(255, 255, 255, 0.2)",
+                              color: "text.primary",
+                            }}
+                          />
+                          <Bar dataKey="likes" fill={COLORS[0]} radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="posts" fill={COLORS[1]} radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="comments" fill={COLORS[2]} radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </Card>
+                  </Box>
+                </Box>
+              )}
             </Box>
           </Box>
         </motion.div>
@@ -572,7 +870,6 @@ const UserPage = () => {
   );
 };
 
-// FollowerCard and FollowingCard components remain unchanged
 const FollowerCard = ({ followerId, navigate }) => {
   const [follower, setFollower] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -582,9 +879,9 @@ const FollowerCard = ({ followerId, navigate }) => {
       try {
         const res = await fetch(`/api/users/profile/${followerId}`, {
           credentials: "include",
+          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
         });
         const data = await res.json();
-        console.log("Follower response:", data);
         if (res.ok) {
           setFollower(data);
         } else {
@@ -675,9 +972,9 @@ const FollowingCard = ({ followingId, navigate }) => {
       try {
         const res = await fetch(`/api/users/profile/${followingId}`, {
           credentials: "include",
+          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
         });
         const data = await res.json();
-        console.log("Following user response:", data);
         if (res.ok) {
           setFollowingUser(data);
         } else {

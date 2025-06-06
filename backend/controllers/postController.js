@@ -172,6 +172,8 @@ const createPost = async (req, res) => {
       req.io.to(`post:${newPost._id}`).emit("newFeedPost", populatedPost);
     }
 
+    await emitAnalyticsUpdate(req.io);
+
     res.status(201).json(populatedPost);
   } catch (err) {
     console.error("createPost: Error", { message: err.message, stack: err.stack, postedBy: req.body.postedBy });
@@ -276,6 +278,8 @@ const deletePost = async (req, res) => {
       req.io.to(`post:${req.params.id}`).emit("postDeleted", { postId: req.params.id, userId: post.postedBy });
     }
 
+    await emitAnalyticsUpdate(req.io);
+
     res.status(200).json({ message: "Post deleted successfully" });
   } catch (err) {
     console.error("deletePost: Error", { message: err.message, stack: err.stack, postId: req.params.id });
@@ -343,6 +347,8 @@ const editPost = async (req, res) => {
       req.io.to(`post:${postId}`).emit("postUpdated", populatedPost);
     }
 
+    await emitAnalyticsUpdate(req.io);
+
     res.status(200).json(populatedPost);
   } catch (err) {
     console.error("editPost: Error", { message: err.message, stack: err.stack, postId: req.params.id });
@@ -406,6 +412,8 @@ const likeUnlikePost = async (req, res) => {
       });
     }
 
+    await emitAnalyticsUpdate(req.io);
+
     res.status(200).json({ likes: populatedPost.likes, post: populatedPost });
   } catch (err) {
     console.error("likeUnlikePost: Error", { message: err.message, stack: err.stack, postId: req.params.id });
@@ -451,6 +459,8 @@ const bookmarkUnbookmarkPost = async (req, res) => {
         post: populatedPost,
       });
     }
+
+    await emitAnalyticsUpdate(req.io);
 
     res.status(200).json({
       message: isBookmarked ? "Post unbookmarked" : "Post bookmarked",
@@ -554,6 +564,8 @@ const commentOnPost = async (req, res) => {
         post: populatedPost,
       });
     }
+
+    await emitAnalyticsUpdate(req.io);
 
     res.status(201).json({ comment: newComment, post: populatedPost });
   } catch (err) {
@@ -695,6 +707,8 @@ const editComment = async (req, res) => {
       });
     }
 
+    await emitAnalyticsUpdate(req.io);
+
     res.status(200).json({
       comment: comment,
       message: "Comment updated successfully"
@@ -750,6 +764,8 @@ const deleteComment = async (req, res) => {
         deletedBy: userId
       });
     }
+
+    await emitAnalyticsUpdate(req.io);
 
     res.status(200).json({ 
       message: "Comment deleted successfully",
@@ -810,6 +826,8 @@ const likeUnlikeComment = async (req, res) => {
       });
     }
 
+    await emitAnalyticsUpdate(req.io);
+
     res.status(200).json({ 
       likes: comment.likes,
       totalLikes: comment.likes.length,
@@ -855,6 +873,8 @@ const banPost = async (req, res) => {
       });
     }
 
+    await emitAnalyticsUpdate(req.io);
+
     res.status(200).json({
       message: "Post banned successfully",
       post: populatedPost,
@@ -897,6 +917,8 @@ const unbanPost = async (req, res) => {
         post: populatedPost,
       });
     }
+
+    await emitAnalyticsUpdate(req.io);
 
     res.status(200).json({
       message: "Post unbanned successfully",
@@ -1142,6 +1164,62 @@ const getSuggestedPosts = async (req, res) => {
     res.status(500).json({ error: `Failed to fetch suggested posts: ${err.message}` });
   }
 };
+
+// Utility function to emit analytics update to all admins
+async function emitAnalyticsUpdate(io) {
+  if (!io) return;
+  // You may want to reuse your getAdminStats logic here
+  const [
+    totalPosts,
+    totalUsers,
+    totalLikes,
+    totalComments,
+    bannedPosts,
+    bannedUsers,
+  ] = await Promise.all([
+    Post.countDocuments(),
+    User.countDocuments(),
+    Post.aggregate([{ $project: { count: { $size: "$likes" } } }, { $group: { _id: null, total: { $sum: "$count" } } }]),
+    Post.aggregate([{ $project: { count: { $size: "$comments" } } }, { $group: { _id: null, total: { $sum: "$count" } } }]),
+    Post.countDocuments({ isBanned: true }),
+    User.countDocuments({ isBanned: true }),
+  ]);
+  const threeMonthsAgo = new Date();
+  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+  const activityData = await Post.aggregate([
+    { $match: { createdAt: { $gte: threeMonthsAgo } } },
+    { $group: { _id: { $month: "$createdAt" }, posts: { $sum: 1 }, likes: { $sum: { $size: "$likes" } }, comments: { $sum: { $size: "$comments" } } } },
+    { $sort: { "_id": 1 } }
+  ]);
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const formattedActivityData = activityData.map(item => ({
+    month: monthNames[item._id - 1],
+    posts: item.posts,
+    likes: item.likes,
+    comments: item.comments
+  }));
+  const userActivity = await User.aggregate([
+    { $lookup: { from: "posts", localField: "_id", foreignField: "postedBy", as: "userPosts" } },
+    { $project: { username: 1, posts: { $size: "$userPosts" }, likes: { $reduce: { input: "$userPosts", initialValue: 0, in: { $add: ["$$value", { $size: "$$this.likes" }] } } } } },
+    { $sort: { posts: -1 } },
+    { $limit: 50 }
+  ]);
+  const recentPosts = await Post.find({})
+    .sort({ createdAt: -1 })
+    .limit(6)
+    .populate("postedBy", "username isBanned");
+  io.emit("analyticsUpdate", {
+    totalPosts,
+    totalUsers,
+    totalLikes: totalLikes[0]?.total || 0,
+    totalComments: totalComments[0]?.total || 0,
+    bannedPosts,
+    bannedUsers,
+    activityData: formattedActivityData,
+    userActivity,
+    recentPosts
+  });
+}
 
 export {
   createPost,

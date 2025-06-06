@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  Box,
   Button,
   FormControl,
   IconButton,
@@ -10,13 +9,14 @@ import {
   Typography,
   CircularProgress,
   Link,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import { Visibility, VisibilityOff } from '@mui/icons-material';
 import { motion } from 'framer-motion';
 import { useSetRecoilState } from 'recoil';
 import authScreenAtom from '../atoms/authAtom';
 import useShowToast from '../hooks/useShowToast';
-import userAtom from '../atoms/userAtom';
 import { useNavigate } from 'react-router-dom';
 
 export default function SignupCard() {
@@ -25,6 +25,9 @@ export default function SignupCard() {
   const showToast = useShowToast();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const theme = useTheme();
+  const isXs = useMediaQuery(theme.breakpoints.down('sm'));
+  const isSm = useMediaQuery(theme.breakpoints.between('sm', 'md'));
 
   const [inputs, setInputs] = useState({
     name: '',
@@ -35,10 +38,21 @@ export default function SignupCard() {
   });
 
   const handleSignup = async () => {
+    if (!inputs.name || !inputs.username || !inputs.email || !inputs.password || !inputs.confirmPassword) {
+      showToast('Error', 'Please fill all fields', 'error');
+      return;
+    }
+
     if (inputs.password !== inputs.confirmPassword) {
       showToast('Error', 'Passwords do not match', 'error');
       return;
     }
+
+    if (inputs.password.length < 6) {
+      showToast('Error', 'Password must be at least 6 characters', 'error');
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await fetch('/api/users/signup', {
@@ -58,14 +72,11 @@ export default function SignupCard() {
         return;
       }
 
-      // Clear any existing authentication state
       localStorage.removeItem('user-NRBLOG');
-      console.log('Signup successful, redirecting to login'); // Debug log
       showToast('Success', 'Signed up successfully. Please log in.', 'success');
-      // Delay navigation to ensure toast visibility and state update
       setTimeout(() => {
         setAuthScreen('login');
-        navigate('/auth', { replace: true }); // Use replace to avoid back navigation
+        navigate('/auth', { replace: true });
       }, 500);
     } catch (error) {
       showToast('Error', error.message || 'Something went wrong', 'error');
@@ -76,76 +87,73 @@ export default function SignupCard() {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
+      style={{ padding: isXs ? '0.5rem' : isSm ? '1rem' : '1.5rem' }}
     >
-      <Stack spacing={3}>
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-          <FormControl fullWidth required>
-            <TextField
-              label="Full Name"
-              type="text"
-              placeholder="John Doe"
-              value={inputs.name}
-              onChange={(e) => setInputs({ ...inputs, name: e.target.value })}
-              sx={{
-                '& .MuiOutlinedInput-root': {
-                  borderRadius: 8,
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.2)' },
-                  '&:hover fieldset': { borderColor: '#a78bfa' },
-                  '&.Mui-focused fieldset': { borderColor: '#a78bfa' },
-                },
-                '& .MuiInputLabel-root': { color: 'rgba(255, 255, 255, 0.7)' },
-                '& .MuiInputLabel-root.Mui-focused': { color: '#a78bfa' },
-                '& .MuiInputBase-input': { color: '#fff' },
-              }}
-            />
-          </FormControl>
-          <FormControl fullWidth required>
-            <TextField
-              label="Username"
-              type="text"
-              placeholder="johndoe"
-              value={inputs.username}
-              onChange={(e) => setInputs({ ...inputs, username: e.target.value })}
-              sx={{
-                '& .MuiOutlinedInput-root': {
-                  borderRadius: 8,
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.2)' },
-                  '&:hover fieldset': { borderColor: '#a78bfa' },
-                  '&.Mui-focused fieldset': { borderColor: '#a78bfa' },
-                },
-                '& .MuiInputLabel-root': { color: 'rgba(255, 255, 255, 0.7)' },
-                '& .MuiInputLabel-root.Mui-focused': { color: '#a78bfa' },
-                '& .MuiInputBase-input': { color: '#fff' },
-              }}
-            />
-          </FormControl>
-        </Stack>
+      <Typography
+        variant={isXs ? 'h6' : 'h5'}
+        sx={{
+          textAlign: 'center',
+          mb: isXs ? 1.5 : isSm ? 2 : 2.5,
+          fontFamily: "'Inter', sans-serif",
+          fontWeight: 700,
+          color: 'transparent',
+          background: 'linear-gradient(90deg, #FFD700, #4ECDC4, #A1C4FD)',
+          backgroundSize: '200% 200%',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          animation: 'gradientShift 5s ease infinite, textGlow 3s ease-in-out infinite alternate',
+          fontSize: isXs ? '1.4rem' : isSm ? '1.6rem' : '1.8rem',
+          '@keyframes gradientShift': {
+            '0%': { backgroundPosition: '0% 50%' },
+            '50%': { backgroundPosition: '100% 50%' },
+            '100%': { backgroundPosition: '0% 50%' }
+          },
+          '@keyframes textGlow': {
+            '0%': { textShadow: '0 0 8px rgba(255, 215, 0, 0.3)' },
+            '100%': { textShadow: '0 0 15px rgba(161, 196, 253, 0.5)' }
+          }
+        }}
+      >
+        Create Account
+      </Typography>
+
+      <Stack spacing={isXs ? 1.5 : isSm ? 2 : 2.5}>
+        <FormControl fullWidth required>
+          <TextField
+            label="Full Name"
+            type="text"
+            placeholder="Enter full name"
+            value={inputs.name}
+            onChange={(e) => setInputs({ ...inputs, name: e.target.value })}
+            sx={textFieldStyles}
+          />
+        </FormControl>
+
+        <FormControl fullWidth required>
+          <TextField
+            label="Username"
+            type="text"
+            placeholder="Enter username"
+            value={inputs.username}
+            onChange={(e) => setInputs({ ...inputs, username: e.target.value })}
+            sx={textFieldStyles}
+          />
+        </FormControl>
+
         <FormControl fullWidth required>
           <TextField
             label="Email Address"
             type="email"
-            placeholder="example@email.com"
+            placeholder="Enter email address"
             value={inputs.email}
             onChange={(e) => setInputs({ ...inputs, email: e.target.value })}
-            sx={{
-              '& .MuiOutlinedInput-root': {
-                borderRadius: 8,
-                background: 'rgba(255, 255, 255, 0.05)',
-                '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.2)' },
-                '&:hover fieldset': { borderColor: '#a78bfa' },
-                '&.Mui-focused fieldset': { borderColor: '#a78bfa' },
-              },
-              '& .MuiInputLabel-root': { color: 'rgba(255, 255, 255, 0.7)' },
-              '& .MuiInputLabel-root.Mui-focused': { color: '#a78bfa' },
-              '& .MuiInputBase-input': { color: '#fff' },
-            }}
+            sx={textFieldStyles}
           />
         </FormControl>
+
         <FormControl fullWidth required>
           <TextField
             label="Password"
@@ -153,33 +161,30 @@ export default function SignupCard() {
             placeholder="Enter password"
             value={inputs.password}
             onChange={(e) => setInputs({ ...inputs, password: e.target.value })}
-            sx={{
-              '& .MuiOutlinedInput-root': {
-                borderRadius: 8,
-                background: 'rgba(255, 255, 255, 0.05)',
-                '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.2)' },
-                '&:hover fieldset': { borderColor: '#a78bfa' },
-                '&.Mui-focused fieldset': { borderColor: '#a78bfa' },
-              },
-              '& .MuiInputLabel-root': { color: 'rgba(255, 255, 255, 0.7)' },
-              '& .MuiInputLabel-root.Mui-focused': { color: '#a78bfa' },
-              '& .MuiInputBase-input': { color: '#fff' },
-            }}
+            sx={textFieldStyles}
             InputProps={{
               endAdornment: (
                 <InputAdornment position="end">
                   <IconButton
                     onClick={() => setShowPassword((prev) => !prev)}
-                    edge="end"
-                    sx={{ color: 'rgba(255, 255, 255, 0.7)' }}
+                    sx={{
+                      color: '#E6E6FA',
+                      '&:hover': {
+                        color: '#A1C4FD',
+                        backgroundColor: 'rgba(161, 196, 253, 0.1)',
+                        transform: 'scale(1.1)'
+                      },
+                      transition: 'all 0.3s ease'
+                    }}
                   >
-                    {showPassword ? <VisibilityOff /> : <Visibility />}
+                    {showPassword ? <VisibilityOff fontSize={isXs ? 'small' : 'medium'} /> : <Visibility fontSize={isXs ? 'small' : 'medium'} />}
                   </IconButton>
                 </InputAdornment>
               ),
             }}
           />
         </FormControl>
+
         <FormControl fullWidth required>
           <TextField
             label="Confirm Password"
@@ -187,62 +192,80 @@ export default function SignupCard() {
             placeholder="Confirm password"
             value={inputs.confirmPassword}
             onChange={(e) => setInputs({ ...inputs, confirmPassword: e.target.value })}
-            sx={{
-              '& .MuiOutlinedInput-root': {
-                borderRadius: 8,
-                background: 'rgba(255, 255, 255, 0.05)',
-                '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.2)' },
-                '&:hover fieldset': { borderColor: '#a78bfa' },
-                '&.Mui-focused fieldset': { borderColor: '#a78bfa' },
-              },
-              '& .MuiInputLabel-root': { color: 'rgba(255, 255, 255, 0.7)' },
-              '& .MuiInputLabel-root.Mui-focused': { color: '#a78bfa' },
-              '& .MuiInputBase-input': { color: '#fff' },
-            }}
+            sx={textFieldStyles}
             InputProps={{
               endAdornment: (
                 <InputAdornment position="end">
                   <IconButton
                     onClick={() => setShowPassword((prev) => !prev)}
-                    edge="end"
-                    sx={{ color: 'rgba(255, 255, 255, 0.7)' }}
+                    sx={{
+                      color: '#E6E6FA',
+                      '&:hover': {
+                        color: '#A1C4FD',
+                        backgroundColor: 'rgba(161, 196, 253, 0.1)',
+                        transform: 'scale(1.1)'
+                      },
+                      transition: 'all 0.3s ease'
+                    }}
                   >
-                    {showPassword ? <VisibilityOff /> : <Visibility />}
+                    {showPassword ? <VisibilityOff fontSize={isXs ? 'small' : 'medium'} /> : <Visibility fontSize={isXs ? 'small' : 'medium'} />}
                   </IconButton>
                 </InputAdornment>
               ),
             }}
           />
         </FormControl>
+
         <Button
           variant="contained"
-          size="large"
           onClick={handleSignup}
           disabled={loading}
           fullWidth
           sx={{
-            py: 1.5,
-            borderRadius: 8,
-            textTransform: 'none',
-            fontWeight: 'bold',
-            fontSize: '1rem',
-            bgcolor: '#a78bfa',
-            '&:hover': {
-              bgcolor: '#8b5cf6',
-              transform: 'scale(1.05)',
-              transition: 'all 0.3s ease',
-            },
+            ...buttonStyles,
+            py: isXs ? 1 : isSm ? 1.2 : 1.5,
+            fontSize: isXs ? '0.9rem' : isSm ? '0.95rem' : '1rem',
           }}
         >
-          {loading ? <CircularProgress size={24} sx={{ color: '#fff' }} /> : 'Sign Up'}
+          {loading ? <CircularProgress size={isXs ? 20 : 24} sx={{ color: '#E6E6FA' }} /> : 'Sign Up'}
         </Button>
-        <Typography variant="body2" color="rgba(255, 255, 255, 0.7)" textAlign="center">
+
+        <Typography
+          variant="body2"
+          sx={{
+            fontFamily: "'Inter', sans-serif",
+            color: 'rgba(230, 230, 250, 0.7)',
+            textAlign: 'center',
+            fontSize: isXs ? '0.8rem' : isSm ? '0.85rem' : '0.9rem',
+            mt: isXs ? 0.5 : 1,
+          }}
+        >
           Already a user?{' '}
           <Link
-            href="#"
-            color="#a78bfa"
+            component="button"
             onClick={() => setAuthScreen('login')}
-            sx={{ textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+            sx={{
+              color: '#A1C4FD',
+              fontWeight: 600,
+              position: 'relative',
+              '&:hover': {
+                color: '#C2E9FB',
+                '&::after': {
+                  content: '""',
+                  position: 'absolute',
+                  bottom: -2,
+                  left: 0,
+                  width: '100%',
+                  height: '2px',
+                  background: 'linear-gradient(90deg, #A1C4FD, #C2E9FB)',
+                  animation: 'underlineGrow 0.3s ease-out forwards',
+                  '@keyframes underlineGrow': {
+                    '0%': { transform: 'scaleX(0)' },
+                    '100%': { transform: 'scaleX(1)' }
+                  }
+                }
+              },
+            }}
           >
             Login
           </Link>
@@ -251,3 +274,61 @@ export default function SignupCard() {
     </motion.div>
   );
 }
+
+const textFieldStyles = {
+  '& .MuiOutlinedInput-root': {
+    borderRadius: 12,
+    background: 'rgba(20, 20, 30, 0.5)',
+    '& fieldset': {
+      borderColor: 'rgba(78, 205, 196, 0.3)',
+      transition: 'all 0.3s ease',
+    },
+    '&:hover fieldset': {
+      borderColor: 'rgba(161, 196, 253, 0.5)',
+      boxShadow: '0 0 10px rgba(161, 196, 253, 0.1)',
+    },
+    '&.Mui-focused fieldset': {
+      borderColor: '#A1C4FD',
+      boxShadow: '0 0 15px rgba(161, 196, 253, 0.2)',
+    },
+  },
+  '& .MuiInputLabel-root': {
+    color: 'rgba(230, 230, 250, 0.7)',
+    fontFamily: "'Inter', sans-serif",
+    fontSize: { xs: '0.9rem', sm: '0.95rem', md: '1rem' },
+    '&.Mui-focused': {
+      color: '#A1C4FD',
+    },
+  },
+  '& .MuiInputBase-input': {
+    color: '#E6E6FA',
+    fontFamily: "'Inter', sans-serif",
+    padding: { xs: '12px 14px', sm: '14px 16px', md: '16px 18px' },
+    '&::placeholder': {
+      color: 'rgba(230, 230, 250, 0.5)',
+      opacity: 1,
+    },
+  },
+};
+
+const buttonStyles = {
+  borderRadius: 12,
+  textTransform: 'none',
+  fontFamily: "'Inter', sans-serif",
+  fontWeight: 600,
+  background: 'linear-gradient(90deg, #FFD700, #4ECDC4, #A1C4FD)',
+  backgroundSize: '200% 200%',
+  boxShadow: '0 4px 15px rgba(161, 196, 253, 0.3)',
+  transition: 'all 0.3s ease',
+  '&:hover': {
+    background: 'linear-gradient(90deg, #FFC107, #4ECDC4, #A1C4FD)',
+    backgroundSize: '200% 200%',
+    transform: 'translateY(-3px)',
+    boxShadow: '0 8px 20px rgba(161, 196, 253, 0.5)',
+  },
+  '&:disabled': {
+    background: 'rgba(230, 230, 250, 0.2)',
+    boxShadow: 'none',
+    color: 'rgba(230, 230, 250, 0.5)',
+  },
+};

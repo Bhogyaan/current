@@ -125,7 +125,7 @@ function App() {
       try {
         const token = localStorage.getItem("token");
         if (token) {
-          const res = await fetch("/api/users/me", {
+          const res = await fetch("//users/me", {
             headers: { Authorization: `Bearer ${token}` },
             credentials: "include",
           });

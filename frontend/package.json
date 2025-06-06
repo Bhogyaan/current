@@ -17,6 +17,7 @@
     "@mui/icons-material": "^7.1.0",
     "@mui/material": "^7.1.0",
     "@tsparticles/react": "^3.0.0",
+    "@tsparticles/slim": "^3.8.1",
     "antd": "^5.24.6",
     "backend": "file:..",
     "bcryptjs": "^3.0.2",
